@@ -1,0 +1,52 @@
+From 58170a3785010a8c2b3dc5c1e31784decd8463d7 Mon Sep 17 00:00:00 2001
+From: RobertGarciaa <chae0218@naver.com>
+Date: Wed, 26 Nov 2025 13:42:06 +0900
+Subject: [PATCH 1/2] ro.lineage -> ro.pixelg
+
+---
+ build/envsetup.sh | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/build/envsetup.sh b/build/envsetup.sh
+index 93de2bf1..bc758399 100644
+--- a/build/envsetup.sh
++++ b/build/envsetup.sh
+@@ -78,7 +78,7 @@ function eat()
+         echo "Waiting for device..."
+         adb wait-for-device-recovery
+         echo "Found device"
+-        if (adb shell getprop ro.lineage.device | grep -q "$LINEAGE_BUILD"); then
++        if (adb shell getprop ro.pixelg.device | grep -q "$LINEAGE_BUILD"); then
+             echo "Rebooting to sideload for install"
+             adb reboot sideload-auto-reboot
+             adb wait-for-sideload
+@@ -371,7 +371,7 @@ function installboot()
+     adb wait-for-device-recovery
+     adb root
+     adb wait-for-device-recovery
+-    if (adb shell getprop ro.lineage.device | grep -q "$LINEAGE_BUILD");
++    if (adb shell getprop ro.pixelg.device | grep -q "$LINEAGE_BUILD");
+     then
+         adb push $OUT/boot.img /cache/
+         adb shell dd if=/cache/boot.img of=$PARTITION
+@@ -409,7 +409,7 @@ function installrecovery()
+     adb wait-for-device-recovery
+     adb root
+     adb wait-for-device-recovery
+-    if (adb shell getprop ro.lineage.device | grep -q "$LINEAGE_BUILD");
++    if (adb shell getprop ro.pixelg.device | grep -q "$LINEAGE_BUILD");
+     then
+         adb push $OUT/recovery.img /cache/
+         adb shell dd if=/cache/recovery.img of=$PARTITION
+@@ -771,7 +771,7 @@ function dopush()
+         echo "Device Found."
+     fi
+ 
+-    if (adb shell getprop ro.lineage.device | grep -q "$LINEAGE_BUILD") || [ "$FORCE_PUSH" = "true" ];
++    if (adb shell getprop ro.pixelg.device | grep -q "$LINEAGE_BUILD") || [ "$FORCE_PUSH" = "true" ];
+     then
+     # retrieve IP and PORT info if we're using a TCP connection
+     TCPIPPORT=$(adb devices \
+-- 
+2.43.0
+

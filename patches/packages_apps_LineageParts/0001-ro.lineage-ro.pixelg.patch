@@ -1,0 +1,25 @@
+From b2d3e92a59bb5a41c212e872ecd5841adf61cf70 Mon Sep 17 00:00:00 2001
+From: RobertGarciaa <chae0218@naver.com>
+Date: Wed, 26 Nov 2025 13:48:31 +0900
+Subject: [PATCH] ro.lineage -> ro.pixelg
+
+---
+ src/org/lineageos/lineageparts/lineagestats/Utilities.java | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/org/lineageos/lineageparts/lineagestats/Utilities.java b/src/org/lineageos/lineageparts/lineagestats/Utilities.java
+index 7fbc13d..b71b2fc 100644
+--- a/src/org/lineageos/lineageparts/lineagestats/Utilities.java
++++ b/src/org/lineageos/lineageparts/lineagestats/Utilities.java
+@@ -64,7 +64,7 @@ public class Utilities {
+     }
+ 
+     public static String getDevice() {
+-        return SystemProperties.get("ro.lineage.device", Build.PRODUCT);
++        return SystemProperties.get("ro.pixelg.device", Build.PRODUCT);
+     }
+ 
+     public static String getModVersion() {
+-- 
+2.43.0
+

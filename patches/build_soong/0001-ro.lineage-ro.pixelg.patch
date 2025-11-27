@@ -1,0 +1,25 @@
+From 79a52135c6df345d1078e3c35daf4277542a6576 Mon Sep 17 00:00:00 2001
+From: RobertGarciaa <chae0218@naver.com>
+Date: Wed, 26 Nov 2025 13:44:14 +0900
+Subject: [PATCH] ro.lineage -> ro.pixelg
+
+---
+ scripts/gen_build_prop.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/scripts/gen_build_prop.py b/scripts/gen_build_prop.py
+index 87c34945a..c0a07e811 100644
+--- a/scripts/gen_build_prop.py
++++ b/scripts/gen_build_prop.py
+@@ -246,7 +246,7 @@ def generate_build_info(args):
+   # flavor (via a dedicated lunch config for example).
+   print(f"ro.build.flavor={config['BuildFlavor']}")
+ 
+-  print(f"ro.lineage.device={config['LineageDevice']}")
++  print(f"ro.pixelg.device={config['LineageDevice']}")
+   print(f"ro.crdroid.device={config['LineageDevice']}")
+ 
+   # These values are deprecated, use "ro.product.cpu.abilist"
+-- 
+2.43.0
+

@@ -1,0 +1,31 @@
+From 8397c1e9e8458ac709dcffae0d86b7593aaad0e2 Mon Sep 17 00:00:00 2001
+From: RobertGarciaa <chae0218@naver.com>
+Date: Thu, 27 Nov 2025 09:49:03 +0900
+Subject: [PATCH] ro.pixelg
+
+Signed-off-by: RobertGarciaa <chae0218@naver.com>
+---
+ common/private/property_contexts | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/common/private/property_contexts b/common/private/property_contexts
+index 7182ae9..97ff4d8 100644
+--- a/common/private/property_contexts
++++ b/common/private/property_contexts
+@@ -25,6 +25,13 @@ ro.crdroid.build.version               u:object_r:custom_version_prop:s0
+ ro.crdroid.display.version             u:object_r:custom_version_prop:s0
+ ro.crdroid.version                     u:object_r:custom_version_prop:s0
+ 
++# Custom version (pixelg)
++ro.pixelg.device                      u:object_r:custom_version_prop:s0
++ro.pixelg.version                     u:object_r:custom_version_prop:s0
++ro.pixelg.display.version             u:object_r:custom_version_prop:s0
++ro.pixelg.build.version               u:object_r:custom_version_prop:s0
++ro.pixelg.releasetype                 u:object_r:custom_version_prop:s0
++
+ # Custom version (lineage)
+ ro.lineage.device                      u:object_r:custom_version_prop:s0
+ ro.lineage.version                     u:object_r:custom_version_prop:s0
+-- 
+2.43.0
+

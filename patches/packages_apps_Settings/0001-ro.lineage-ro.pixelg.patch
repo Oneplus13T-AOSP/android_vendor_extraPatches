@@ -1,0 +1,25 @@
+From cdc3cd38868e13500008a0e0034f298df14ec4a8 Mon Sep 17 00:00:00 2001
+From: RobertGarciaa <chae0218@naver.com>
+Date: Wed, 26 Nov 2025 13:46:22 +0900
+Subject: [PATCH] ro.lineage -> ro.pixelg
+
+---
+ .../LineageVendorSecurityPatchLevelPreferenceController.java    | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/com/android/settings/deviceinfo/firmwareversion/LineageVendorSecurityPatchLevelPreferenceController.java b/src/com/android/settings/deviceinfo/firmwareversion/LineageVendorSecurityPatchLevelPreferenceController.java
+index 40887ee5805..5d3cece72c6 100644
+--- a/src/com/android/settings/deviceinfo/firmwareversion/LineageVendorSecurityPatchLevelPreferenceController.java
++++ b/src/com/android/settings/deviceinfo/firmwareversion/LineageVendorSecurityPatchLevelPreferenceController.java
+@@ -36,7 +36,7 @@ public class LineageVendorSecurityPatchLevelPreferenceController extends BasePre
+             "ro.vendor.build.security_patch";
+ 
+     private static final String KEY_LINEAGE_VENDOR_SECURITY_PATCH =
+-            "ro.lineage.build.vendor_security_patch";
++            "ro.pixelg.build.vendor_security_patch";
+ 
+     public LineageVendorSecurityPatchLevelPreferenceController(Context context, String key) {
+         super(context, key);
+-- 
+2.43.0
+

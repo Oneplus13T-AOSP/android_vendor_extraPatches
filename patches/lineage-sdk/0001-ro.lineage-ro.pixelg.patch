@@ -1,0 +1,25 @@
+From 7d44f4a93ec575f8bbfa10e2e691e9d1c1bbb0de Mon Sep 17 00:00:00 2001
+From: RobertGarciaa <chae0218@naver.com>
+Date: Wed, 26 Nov 2025 13:47:20 +0900
+Subject: [PATCH] ro.lineage -> ro.pixelg
+
+---
+ .../org/lineageos/platform/internal/TrustInterfaceService.java  | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/lineage/lib/main/java/org/lineageos/platform/internal/TrustInterfaceService.java b/lineage/lib/main/java/org/lineageos/platform/internal/TrustInterfaceService.java
+index 0cd748e5..784a69ea 100644
+--- a/lineage/lib/main/java/org/lineageos/platform/internal/TrustInterfaceService.java
++++ b/lineage/lib/main/java/org/lineageos/platform/internal/TrustInterfaceService.java
+@@ -40,7 +40,7 @@ public class TrustInterfaceService extends LineageSystemService {
+     private static final String PLATFORM_SECURITY_PATCHES = "ro.build.version.security_patch";
+     private static final String VENDOR_SECURITY_PATCHES = "ro.vendor.build.security_patch";
+     private static final String LINEAGE_VENDOR_SECURITY_PATCHES =
+-            "ro.lineage.build.vendor_security_patch";
++            "ro.pixelg.build.vendor_security_patch";
+ 
+     private static final String INTENT_PARTS = "org.lineageos.lineageparts.TRUST_INTERFACE";
+     private static final String INTENT_ONBOARDING = "org.lineageos.lineageparts.TRUST_HINT";
+-- 
+2.43.0
+
