@@ -1,0 +1,29 @@
+From 3e5ab5b6dd1bad5323a39b9a1cc63ba173c2c997 Mon Sep 17 00:00:00 2001
+From: RobertGarciaa <chae0218@naver.com>
+Date: Wed, 26 Nov 2025 13:54:16 +0900
+Subject: [PATCH 2/2] fix mindthegapps issue
+
+Signed-off-by: RobertGarciaa <chae0218@naver.com>
+---
+ config/common.mk | 5 -----
+ 1 file changed, 5 deletions(-)
+
+diff --git a/config/common.mk b/config/common.mk
+index c476caa7..b70521c1 100644
+--- a/config/common.mk
++++ b/config/common.mk
+@@ -261,11 +261,6 @@ endif
+ # Audio files
+ $(call inherit-product, vendor/lineage/audio/audio.mk)
+ 
+-# SetupWizard
+-PRODUCT_PRODUCT_PROPERTIES += \
+-    setupwizard.theme=glif_v4 \
+-    setupwizard.feature.day_night_mode_enabled=true
+-
+ PRODUCT_ENFORCE_RRO_EXCLUDED_OVERLAYS += vendor/lineage/overlay/no-rro
+ PRODUCT_PACKAGE_OVERLAYS += \
+     vendor/lineage/overlay/common \
+-- 
+2.43.0
+

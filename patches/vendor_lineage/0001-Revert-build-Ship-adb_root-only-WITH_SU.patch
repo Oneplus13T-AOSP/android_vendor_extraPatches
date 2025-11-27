@@ -1,0 +1,43 @@
+From bc3b33839964481f0f3727d919641223b268d674 Mon Sep 17 00:00:00 2001
+From: RobertGarciaa <chae0218@naver.com>
+Date: Wed, 26 Nov 2025 15:30:42 +0900
+Subject: [PATCH] Revert "build: Ship adb_root only WITH_SU"
+
+This reverts commit e844c8b667bef07015328e712264f60ef6b52d38.
+---
+ config/common.mk  | 2 +-
+ config/crdroid.mk | 1 +
+ 2 files changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/config/common.mk b/config/common.mk
+index b70521c1..2bfbca8a 100644
+--- a/config/common.mk
++++ b/config/common.mk
+@@ -230,11 +230,11 @@ PRODUCT_ARTIFACT_PATH_REQUIREMENT_ALLOWED_LIST += \
+ endif
+ 
+ ifneq ($(TARGET_BUILD_VARIANT),user)
+-ifeq ($(WITH_SU),true)
+ # Root
+ PRODUCT_PACKAGES += \
+     adb_root
+ 
++ifeq ($(WITH_SU),true)
+ PRODUCT_PACKAGES += \
+     su
+ 
+diff --git a/config/crdroid.mk b/config/crdroid.mk
+index 80393e3a..027beeef 100644
+--- a/config/crdroid.mk
++++ b/config/crdroid.mk
+@@ -6,6 +6,7 @@ PRODUCT_SYSTEM_DEFAULT_PROPERTIES += \
+     ro.error.receiver.system.apps=com.google.android.gms \
+     ro.setupwizard.enterprise_mode=1 \
+     ro.atrace.core.services=com.google.android.gms,com.google.android.gms.ui,com.google.android.gms.persistent \
++    ro.setupwizard.rotation_locked=true \
+     ro.com.google.ime.theme_id=5 \
+     ro.opa.eligible_device=true \
+     ro.com.android.wifi-watchlist=GoogleGuest \
+-- 
+2.43.0
+
