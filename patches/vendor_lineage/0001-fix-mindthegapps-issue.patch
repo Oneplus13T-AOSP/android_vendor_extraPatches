@@ -1,6 +1,6 @@
-From 1dd21fe3aba85db8c0deef6a32297c04e3d33ca3 Mon Sep 17 00:00:00 2001
+From 7ea17dbf59dacc2cbd10e7deae22f63f115f38ae Mon Sep 17 00:00:00 2001
 From: RobertGarciaa <chae0218@naver.com>
-Date: Fri, 26 Dec 2025 22:36:13 +0900
+Date: Thu, 29 Jan 2026 17:04:55 +0900
 Subject: [PATCH] fix mindthegapps issue
 
 Signed-off-by: RobertGarciaa <chae0218@naver.com>
@@ -9,7 +9,7 @@ Signed-off-by: RobertGarciaa <chae0218@naver.com>
  1 file changed, 5 deletions(-)
 
 diff --git a/config/common.mk b/config/common.mk
-index b45b10dc..5c36b147 100644
+index 56955b4c..115255ac 100644
 --- a/config/common.mk
 +++ b/config/common.mk
 @@ -260,11 +260,6 @@ endif
@@ -18,7 +18,7 @@ index b45b10dc..5c36b147 100644
  
 -# SetupWizard
 -PRODUCT_PRODUCT_PROPERTIES += \
--    setupwizard.theme=glif_expressive \
+-    setupwizard.theme=glif_v4 \
 -    setupwizard.feature.day_night_mode_enabled=true
 -
  PRODUCT_ENFORCE_RRO_EXCLUDED_OVERLAYS += vendor/lineage/overlay/no-rro
