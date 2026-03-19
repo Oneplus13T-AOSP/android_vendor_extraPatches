@@ -1,0 +1,28 @@
+From 5c1bbcdec4ac2aacffc6241b3679926a2f4722a5 Mon Sep 17 00:00:00 2001
+From: Dmitrii <bankersenator@gmail.com>
+Date: Tue, 6 Jan 2026 15:05:51 +0000
+Subject: [PATCH] art: stop spam when MOVE ioctl missing
+
+01-06 16:21:23.804  2701  2723 W android.vending: userfaultfd: MOVE ioctl seems unsupported: Connection timed out
+
+Signed-off-by: Dmitrii <bankersenator@gmail.com>
+---
+ runtime/gc/collector/mark_compact.cc | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/runtime/gc/collector/mark_compact.cc b/runtime/gc/collector/mark_compact.cc
+index 43308e3d35..6a879cccc0 100644
+--- a/runtime/gc/collector/mark_compact.cc
++++ b/runtime/gc/collector/mark_compact.cc
+@@ -1435,7 +1435,7 @@ bool MarkCompact::PrepareForCompaction() {
+     if (!use_move_ioctl_) {
+       // TODO: add logic to also get reported on pitot as the below log
+       // message will get lost in the logcat.
+-      LOG(WARNING) << "userfaultfd: MOVE ioctl seems unsupported: " << strerror(errno);
++      //LOG(WARNING) << "userfaultfd: MOVE ioctl seems unsupported: " << strerror(errno);
+     }
+   }
+   return true;
+-- 
+2.43.0
+
