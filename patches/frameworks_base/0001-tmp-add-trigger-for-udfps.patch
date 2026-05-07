@@ -1,0 +1,66 @@
+From f136cd780c82fd1541f79bcef2443e6aca980ffb Mon Sep 17 00:00:00 2001
+From: RobertGarciaa <chae0218@naver.com>
+Date: Thu, 7 May 2026 10:31:49 +0900
+Subject: [PATCH] [tmp]add trigger for udfps
+
+Signed-off-by: RobertGarciaa <chae0218@naver.com>
+---
+ .../systemui/biometrics/UdfpsController.java       | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsController.java b/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsController.java
+index c27c7c41b99e..f6ca04ce58c8 100644
+--- a/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsController.java
++++ b/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsController.java
+@@ -131,6 +131,9 @@ import kotlin.Unit;
+ import kotlinx.coroutines.CoroutineScope;
+ 
+ import java.io.PrintWriter;
++import java.io.FileOutputStream;
++import java.io.IOException;
++import java.nio.charset.StandardCharsets;
+ import java.util.ArrayList;
+ import java.util.HashSet;
+ import java.util.Set;
+@@ -153,6 +156,7 @@ import javax.inject.Inject;
+ @SysUISingleton
+ public class UdfpsController implements DozeReceiver, Dumpable {
+     private static final String TAG = "UdfpsController";
++    private static final String FPPRESS_PATH = "/sys/kernel/oplus_display/notify_fppress";
+     private static final long AOD_SEND_FINGER_UP_DELAY_MILLIS = 1000;
+ 
+     private static final long MIN_UNCHANGED_INTERACTION_LOG_INTERVAL = 50;
+@@ -1243,6 +1247,7 @@ public class UdfpsController implements DozeReceiver, Dumpable {
+         }
+ 
+         if (!mOnFingerDown) {
++            writeFppress(1);
+             playStartHaptic();
+ 
+             mDeviceEntryFaceAuthInteractor.onUdfpsSensorTouched();
+@@ -1315,6 +1320,7 @@ public class UdfpsController implements DozeReceiver, Dumpable {
+                     cb.onFingerUp();
+                 }
+             }
++            writeFppress(0);
+             hideUdfpsAnimation();
+         }
+         mOnFingerDown = false;
+@@ -1322,6 +1328,14 @@ public class UdfpsController implements DozeReceiver, Dumpable {
+         cancelAodSendFingerUpAction();
+     }
+ 
++    private void writeFppress(int value) {
++        try (FileOutputStream output = new FileOutputStream(FPPRESS_PATH)) {
++            output.write(Integer.toString(value).getBytes(StandardCharsets.US_ASCII));
++        } catch (IOException e) {
++            Log.w(TAG, "Failed to write fppress value: " + value, e);
++        }
++    }
++
+     public boolean isAnimationEnabled() {
+         return mUdfpsAnimation != null && mUdfpsAnimation.isAnimationEnabled();
+     }
+-- 
+2.43.0
+
