@@ -1,0 +1,95 @@
+From b692dd2a0c5200d632f985d72a4e2c8c77ad0d2e Mon Sep 17 00:00:00 2001
+From: RobertGarciaa <chae0218@naver.com>
+Date: Wed, 19 Aug 2026 12:47:20 +0900
+Subject: [PATCH] Lowering the default animation scale
+
+Change-Id: Ie212218c1f5812502e0559d2433656195b618652
+Signed-off-by: RobertGarciaa <chae0218@naver.com>
+---
+ core/res/res/values/config.xml                               | 2 +-
+ packages/SettingsProvider/res/values/defaults.xml            | 5 +++--
+ .../src/com/android/providers/settings/DatabaseHelper.java   | 2 ++
+ .../server/wm/SharedMemoryBackedCurrentAnimatorScale.java    | 2 +-
+ .../java/com/android/server/wm/WindowManagerService.java     | 4 ++--
+ 5 files changed, 9 insertions(+), 6 deletions(-)
+
+diff --git a/core/res/res/values/config.xml b/core/res/res/values/config.xml
+index 10613692a908..141ff055c0ce 100644
+--- a/core/res/res/values/config.xml
++++ b/core/res/res/values/config.xml
+@@ -5052,7 +5052,7 @@
+          animations. Note that this is only a default and will be overridden by a
+          user-set value if toggled by settings so the "Transition animation scale" setting
+          should also be hidden if intended to be permanent. -->
+-    <item name="config_appTransitionAnimationDurationScaleDefault" format="float" type="dimen">1.0</item>
++    <item name="config_appTransitionAnimationDurationScaleDefault" format="float" type="dimen">0.5</item>
+ 
+     <!-- Flag indicates that whether non-system apps can be installed on internal storage. -->
+     <bool name="config_allow3rdPartyAppOnInternal">true</bool>
+diff --git a/packages/SettingsProvider/res/values/defaults.xml b/packages/SettingsProvider/res/values/defaults.xml
+index 580dce2c63b7..f944d85a7542 100644
+--- a/packages/SettingsProvider/res/values/defaults.xml
++++ b/packages/SettingsProvider/res/values/defaults.xml
+@@ -34,8 +34,9 @@
+     <!-- Default screen brightness, from 0 to 255.  102 is 40%. -->
+     <integer name="def_screen_brightness">102</integer>
+     <bool name="def_screen_brightness_automatic_mode">false</bool>
+-    <fraction name="def_window_animation_scale">100%</fraction>
+-    <fraction name="def_window_transition_scale">100%</fraction>
++    <fraction name="def_window_animation_scale">50%</fraction>
++    <fraction name="def_window_transition_scale">50%</fraction>
++    <fraction name="def_animator_duration_scale">50%</fraction>
+     <bool name="def_haptic_feedback">true</bool>
+ 
+     <bool name="def_bluetooth_on">true</bool>
+diff --git a/packages/SettingsProvider/src/com/android/providers/settings/DatabaseHelper.java b/packages/SettingsProvider/src/com/android/providers/settings/DatabaseHelper.java
+index dc2285f3eaee..031b962c16fe 100644
+--- a/packages/SettingsProvider/src/com/android/providers/settings/DatabaseHelper.java
++++ b/packages/SettingsProvider/src/com/android/providers/settings/DatabaseHelper.java
+@@ -2328,6 +2328,8 @@ class DatabaseHelper extends SQLiteOpenHelper {
+                     AudioManager.RINGER_MODE_NORMAL);
+ 
+             loadDefaultAnimationSettings(stmt);
++            loadFractionSetting(stmt, Settings.Global.ANIMATOR_DURATION_SCALE,
++                    R.fraction.def_animator_duration_scale, 1);
+ 
+             // --- Previously in 'secure'
+             loadBooleanSetting(stmt, Settings.Global.WIFI_ON,
+diff --git a/services/core/java/com/android/server/wm/SharedMemoryBackedCurrentAnimatorScale.java b/services/core/java/com/android/server/wm/SharedMemoryBackedCurrentAnimatorScale.java
+index 9113b49e2286..aa13d66e3ea0 100644
+--- a/services/core/java/com/android/server/wm/SharedMemoryBackedCurrentAnimatorScale.java
++++ b/services/core/java/com/android/server/wm/SharedMemoryBackedCurrentAnimatorScale.java
+@@ -28,7 +28,7 @@ import com.android.internal.os.ApplicationSharedMemory;
+  */
+ final class SharedMemoryBackedCurrentAnimatorScale {
+     private boolean mAnimationsDisabled = false;
+-    private float mCurrentAnimatorScale = 1.f;
++    private float mCurrentAnimatorScale = 0.5f;
+ 
+     void setAnimationsDisabled(boolean disabled) {
+         if (mAnimationsDisabled == disabled) {
+diff --git a/services/core/java/com/android/server/wm/WindowManagerService.java b/services/core/java/com/android/server/wm/WindowManagerService.java
+index 700c1d1cca1f..bed4b75c66d5 100644
+--- a/services/core/java/com/android/server/wm/WindowManagerService.java
++++ b/services/core/java/com/android/server/wm/WindowManagerService.java
+@@ -1113,7 +1113,7 @@ public class WindowManagerService extends IWindowManager.Stub
+         }
+     }
+ 
+-    private static final float DEFAULT_ANIMATION_SCALE = 1.0f;
++    private static final float DEFAULT_ANIMATION_SCALE = 0.5f;
+ 
+     @GuardedBy("mGlobalLock")
+     private float mWindowAnimationScaleSetting = DEFAULT_ANIMATION_SCALE;
+@@ -1608,7 +1608,7 @@ public class WindowManagerService extends IWindowManager.Stub
+ 
+     private float getAnimatorDurationScaleSetting() {
+         return fixScale(Settings.Global.getFloat(mContext.getContentResolver(),
+-                Settings.Global.ANIMATOR_DURATION_SCALE, mAnimatorScale.getCurrentScale()));
++                Settings.Global.ANIMATOR_DURATION_SCALE, DEFAULT_ANIMATION_SCALE));
+     }
+ 
+     private float getWindowAnimationScaleSetting(float defaultValue) {
+-- 
+2.55.0
+
