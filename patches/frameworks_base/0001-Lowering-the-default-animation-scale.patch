@@ -1,0 +1,57 @@
+From b692dd2a0c5200d632f985d72a4e2c8c77ad0d2e Mon Sep 17 00:00:00 2001
+From: RobertGarciaa <chae0218@naver.com>
+Date: Wed, 19 Aug 2026 12:47:20 +0900
+Subject: [PATCH] Lowering the default animation scale
+
+Change-Id: Ie212218c1f5812502e0559d2433656195b618652
+Signed-off-by: RobertGarciaa <chae0218@naver.com>
+---
+ core/res/res/values/config.xml                                | 2 +-
+ packages/SettingsProvider/res/values/defaults.xml             | 4 ++--
+ .../core/java/com/android/server/wm/WindowManagerService.java | 2 +-
+ 3 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/core/res/res/values/config.xml b/core/res/res/values/config.xml
+index 10613692a908..141ff055c0ce 100644
+--- a/core/res/res/values/config.xml
++++ b/core/res/res/values/config.xml
+@@ -5052,7 +5052,7 @@
+          animations. Note that this is only a default and will be overridden by a
+          user-set value if toggled by settings so the "Transition animation scale" setting
+          should also be hidden if intended to be permanent. -->
+-    <item name="config_appTransitionAnimationDurationScaleDefault" format="float" type="dimen">1.0</item>
++    <item name="config_appTransitionAnimationDurationScaleDefault" format="float" type="dimen">0.5</item>
+ 
+     <!-- Flag indicates that whether non-system apps can be installed on internal storage. -->
+     <bool name="config_allow3rdPartyAppOnInternal">true</bool>
+diff --git a/packages/SettingsProvider/res/values/defaults.xml b/packages/SettingsProvider/res/values/defaults.xml
+index 580dce2c63b7..5513e9650960 100644
+--- a/packages/SettingsProvider/res/values/defaults.xml
++++ b/packages/SettingsProvider/res/values/defaults.xml
+@@ -34,8 +34,8 @@
+     <!-- Default screen brightness, from 0 to 255.  102 is 40%. -->
+     <integer name="def_screen_brightness">102</integer>
+     <bool name="def_screen_brightness_automatic_mode">false</bool>
+-    <fraction name="def_window_animation_scale">100%</fraction>
+-    <fraction name="def_window_transition_scale">100%</fraction>
++    <fraction name="def_window_animation_scale">50%</fraction>
++    <fraction name="def_window_transition_scale">50%</fraction>
+     <bool name="def_haptic_feedback">true</bool>
+ 
+     <bool name="def_bluetooth_on">true</bool>
+diff --git a/services/core/java/com/android/server/wm/WindowManagerService.java b/services/core/java/com/android/server/wm/WindowManagerService.java
+index 700c1d1cca1f..e5bdd654f4ac 100644
+--- a/services/core/java/com/android/server/wm/WindowManagerService.java
++++ b/services/core/java/com/android/server/wm/WindowManagerService.java
+@@ -1113,7 +1113,7 @@ public class WindowManagerService extends IWindowManager.Stub
+         }
+     }
+ 
+-    private static final float DEFAULT_ANIMATION_SCALE = 1.0f;
++    private static final float DEFAULT_ANIMATION_SCALE = 0.5f;
+ 
+     @GuardedBy("mGlobalLock")
+     private float mWindowAnimationScaleSetting = DEFAULT_ANIMATION_SCALE;
+-- 
+2.55.0
+
