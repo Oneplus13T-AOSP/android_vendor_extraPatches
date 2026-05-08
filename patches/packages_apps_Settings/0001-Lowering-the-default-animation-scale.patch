@@ -1,0 +1,89 @@
+From ce698f182ebf51ad399633a656df02cc5694524e Mon Sep 17 00:00:00 2001
+From: RobertGarciaa <chae0218@naver.com>
+Date: Fri, 8 May 2026 22:49:28 +0900
+Subject: [PATCH] Lowering the default animation scale
+
+Signed-off-by: RobertGarciaa <chae0218@naver.com>
+---
+ .../accessibility/DisableAnimationsPreferenceController.java  | 4 ++--
+ .../settings/accessibility/RemoveAnimationsPreference.kt      | 2 +-
+ .../AnimatorDurationScalePreferenceController.java            | 2 +-
+ .../TransitionAnimationScalePreferenceController.java         | 2 +-
+ .../development/WindowAnimationScalePreferenceController.java | 2 +-
+ 5 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/src/com/android/settings/accessibility/DisableAnimationsPreferenceController.java b/src/com/android/settings/accessibility/DisableAnimationsPreferenceController.java
+index d9fd2249c02..8c5dc216f1b 100644
+--- a/src/com/android/settings/accessibility/DisableAnimationsPreferenceController.java
++++ b/src/com/android/settings/accessibility/DisableAnimationsPreferenceController.java
+@@ -43,7 +43,7 @@ public class DisableAnimationsPreferenceController extends TogglePreferenceContr
+         LifecycleObserver, OnStart, OnStop {
+ 
+     @VisibleForTesting
+-    static final float ANIMATION_ON_VALUE = 1.0f;
++    static final float ANIMATION_ON_VALUE = 0.4f;
+     @VisibleForTesting
+     static final float ANIMATION_OFF_VALUE = 0.0f;
+ 
+@@ -124,4 +124,4 @@ public class DisableAnimationsPreferenceController extends TogglePreferenceContr
+         mContentResolver.unregisterContentObserver(mSettingsContentObserver);
+     }
+ }
+-// LINT.ThenChange(src/com/android/settings/accessibility/RemoveAnimationsPreference.kt)
+\ No newline at end of file
++// LINT.ThenChange(src/com/android/settings/accessibility/RemoveAnimationsPreference.kt)
+diff --git a/src/com/android/settings/accessibility/RemoveAnimationsPreference.kt b/src/com/android/settings/accessibility/RemoveAnimationsPreference.kt
+index ee962827d6e..ef2e948eab5 100644
+--- a/src/com/android/settings/accessibility/RemoveAnimationsPreference.kt
++++ b/src/com/android/settings/accessibility/RemoveAnimationsPreference.kt
+@@ -116,7 +116,7 @@ class RemoveAnimationsPreference :
+         // is deleted. Use any key from the set of 3 toggle animation keys.
+         const val KEY = Settings.Global.ANIMATOR_DURATION_SCALE
+ 
+-        const val ANIMATION_ON_VALUE: Float = 1.0f
++        const val ANIMATION_ON_VALUE: Float = 0.4f
+         const val ANIMATION_OFF_VALUE: Float = 0.0f
+ 
+         fun isAnimationEnabled(context: Context): Boolean {
+diff --git a/src/com/android/settings/development/AnimatorDurationScalePreferenceController.java b/src/com/android/settings/development/AnimatorDurationScalePreferenceController.java
+index 13b1d14e91e..cc6e082e077 100644
+--- a/src/com/android/settings/development/AnimatorDurationScalePreferenceController.java
++++ b/src/com/android/settings/development/AnimatorDurationScalePreferenceController.java
+@@ -37,7 +37,7 @@ public class AnimatorDurationScalePreferenceController extends DeveloperOptionsP
+     @VisibleForTesting
+     static final int ANIMATOR_DURATION_SCALE_SELECTOR = 2;
+     @VisibleForTesting
+-    static final float DEFAULT_VALUE = 1.0f;
++    static final float DEFAULT_VALUE = 0.4f;
+ 
+     private final IWindowManager mWindowManager;
+     private final String[] mListValues;
+diff --git a/src/com/android/settings/development/TransitionAnimationScalePreferenceController.java b/src/com/android/settings/development/TransitionAnimationScalePreferenceController.java
+index 56d57ef1e77..87377884f57 100644
+--- a/src/com/android/settings/development/TransitionAnimationScalePreferenceController.java
++++ b/src/com/android/settings/development/TransitionAnimationScalePreferenceController.java
+@@ -37,7 +37,7 @@ public class TransitionAnimationScalePreferenceController extends
+     @VisibleForTesting
+     static final int TRANSITION_ANIMATION_SCALE_SELECTOR = 1;
+     @VisibleForTesting
+-    static final float DEFAULT_VALUE = 1.0f;
++    static final float DEFAULT_VALUE = 0.4f;
+ 
+     private final IWindowManager mWindowManager;
+     private final String[] mListValues;
+diff --git a/src/com/android/settings/development/WindowAnimationScalePreferenceController.java b/src/com/android/settings/development/WindowAnimationScalePreferenceController.java
+index 207c5cf7f69..703a4d4bcf2 100644
+--- a/src/com/android/settings/development/WindowAnimationScalePreferenceController.java
++++ b/src/com/android/settings/development/WindowAnimationScalePreferenceController.java
+@@ -37,7 +37,7 @@ public class WindowAnimationScalePreferenceController extends
+     @VisibleForTesting
+     static final int WINDOW_ANIMATION_SCALE_SELECTOR = 0;
+     @VisibleForTesting
+-    static final float DEFAULT_VALUE = 1.0f;
++    static final float DEFAULT_VALUE = 0.4f;
+ 
+     private final IWindowManager mWindowManager;
+     private final String[] mListValues;
+-- 
+2.43.0
+
