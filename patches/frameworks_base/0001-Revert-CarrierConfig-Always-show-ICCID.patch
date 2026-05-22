@@ -1,0 +1,117 @@
+From 093f9077277dffe55825a5adc13927e7097414db Mon Sep 17 00:00:00 2001
+From: RobertGarciaa <chae0218@naver.com>
+Date: Fri, 22 May 2026 13:07:33 +0900
+Subject: [PATCH] Revert "CarrierConfig: Always show ICCID"
+
+This reverts commit 2394f072ed70471319bf6285d4082c440e4f97a0.
+
+Revert "Restore getSimStateForSlotIndex in SubscriptionManager"
+
+This reverts commit 7c23ac83141730c653c5fd620de85358377c5b85.
+
+Revert "TelephonyManager: Gracefully handle null telephony service"
+
+This reverts commit 87b5bc07417e4487567229162434ca2277387a31.
+
+Revert "TelephonyManager: Gracefully handle null telephony service [2]"
+
+This reverts commit 15daa11f3bfaef3e7044f418374e5e4d991b3cd7.
+
+Revert "Telephony: Gracefully handle data enablement checks"
+
+This reverts commit ec4f7a0e3fb33fde262a1b480005ccb5ad1f82fc.
+
+Revert "TelephonyManager: Gracefully handle null telephony service - isNullCipherNotificationsEnabled"
+
+This reverts commit aaa9338398ebbc016bb8db79b6b884986c9cb0d0.
+---
+ .../android/telephony/CarrierConfigManager.java    |  2 +-
+ .../android/telephony/SubscriptionManager.java     | 14 --------------
+ .../java/android/telephony/TelephonyManager.java   | 12 ++++--------
+ 3 files changed, 5 insertions(+), 23 deletions(-)
+
+diff --git a/telephony/java/android/telephony/CarrierConfigManager.java b/telephony/java/android/telephony/CarrierConfigManager.java
+index 6ac664d39967..084db4185f80 100644
+--- a/telephony/java/android/telephony/CarrierConfigManager.java
++++ b/telephony/java/android/telephony/CarrierConfigManager.java
+@@ -11217,7 +11217,7 @@ public class CarrierConfigManager {
+         sDefaults.putBoolean(KEY_VVM_PREFETCH_BOOL, true);
+         sDefaults.putString(KEY_CARRIER_VVM_PACKAGE_NAME_STRING, "");
+         sDefaults.putStringArray(KEY_CARRIER_VVM_PACKAGE_NAME_STRING_ARRAY, null);
+-        sDefaults.putBoolean(KEY_SHOW_ICCID_IN_SIM_STATUS_BOOL, true);
++        sDefaults.putBoolean(KEY_SHOW_ICCID_IN_SIM_STATUS_BOOL, false);
+         sDefaults.putBoolean(KEY_SHOW_SIGNAL_STRENGTH_IN_SIM_STATUS_BOOL, true);
+         sDefaults.putBoolean(KEY_INFLATE_SIGNAL_STRENGTH_BOOL, true);
+         sDefaults.putBoolean(KEY_CI_ACTION_ON_SYS_UPDATE_BOOL, false);
+diff --git a/telephony/java/android/telephony/SubscriptionManager.java b/telephony/java/android/telephony/SubscriptionManager.java
+index 8aff3c6228d4..8b926fadb456 100644
+--- a/telephony/java/android/telephony/SubscriptionManager.java
++++ b/telephony/java/android/telephony/SubscriptionManager.java
+@@ -2970,20 +2970,6 @@ public class SubscriptionManager {
+         return TelephonyManager.getDefault().isNetworkRoaming(subId);
+     }
+ 
+-    /**
+-     * Returns a constant indicating the state of sim for the slot index.
+-     *
+-     * @param slotIndex Logical SIM slot index.
+-     *
+-     * @see TelephonyManager.SimState
+-     *
+-     * @hide
+-     */
+-    @TelephonyManager.SimState
+-    public static int getSimStateForSlotIndex(int slotIndex) {
+-        return TelephonyManager.getSimStateForSlotIndex(slotIndex);
+-    }
+-
+     /**
+      * Set a field in the subscription database. Note not all fields are supported.
+      *
+diff --git a/telephony/java/android/telephony/TelephonyManager.java b/telephony/java/android/telephony/TelephonyManager.java
+index a0baf495889f..1b51e3adcb20 100644
+--- a/telephony/java/android/telephony/TelephonyManager.java
++++ b/telephony/java/android/telephony/TelephonyManager.java
+@@ -10285,8 +10285,7 @@ public class TelephonyManager {
+             if (telephony != null) {
+                 return telephony.getAllowedNetworkTypesForReason(getSubId(), reason);
+             } else {
+-                Rlog.d(TAG, "telephony service is null.");
+-                return -1; // NETWORK_MODE_UNKNOWN
++                throw new IllegalStateException("telephony service is null.");
+             }
+         } catch (RemoteException ex) {
+             Rlog.e(TAG, "getAllowedNetworkTypesForReason RemoteException", ex);
+@@ -14498,8 +14497,7 @@ public class TelephonyManager {
+             if (service != null) {
+                 return service.isDataEnabledForReason(subId, reason);
+             } else {
+-                Log.d(TAG, "Telephony service is null.");
+-                return false;
++                throw new IllegalStateException("telephony service is null.");
+             }
+         } catch (RemoteException ex) {
+             Log.e(TAG, "Telephony#isDataEnabledForReason RemoteException", ex);
+@@ -16145,8 +16143,7 @@ public class TelephonyManager {
+                     return new Pair<Integer, Integer>(version / 100, version % 100);
+                 }
+             } else {
+-                Log.d(TAG, "telephony service is null.");
+-                return HAL_VERSION_UNKNOWN;
++                throw new IllegalStateException("telephony service is null.");
+             }
+         } catch (RemoteException e) {
+             Log.e(TAG, "getHalVersion() RemoteException", e);
+@@ -19261,8 +19258,7 @@ public class TelephonyManager {
+             if (telephony != null) {
+                 return telephony.isNullCipherNotificationsEnabled();
+             } else {
+-                Log.d(TAG, "Telephony service is null.");
+-                return false;
++                throw new IllegalStateException("telephony service is null.");
+             }
+         } catch (RemoteException ex) {
+             Rlog.e(TAG, "isNullCipherNotificationsEnabled RemoteException", ex);
+-- 
+2.43.0
+
