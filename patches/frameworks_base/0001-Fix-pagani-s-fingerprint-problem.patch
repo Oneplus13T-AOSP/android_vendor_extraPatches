@@ -1,0 +1,102 @@
+From 5210779bfefa7da0160dda165cdfa5ac27eaff92 Mon Sep 17 00:00:00 2001
+From: RobertGarciaa <chae0218@naver.com>
+Date: Sun, 31 May 2026 17:08:40 +0900
+Subject: [PATCH] Fix pagani's fingerprint problem
+
+Signed-off-by: RobertGarciaa <chae0218@naver.com>
+---
+ .../systemui/biometrics/UdfpsController.java      |  4 ++++
+ .../systemui/biometrics/UdfpsControllerOverlay.kt | 15 +++++++++++++++
+ .../fingerprint/aidl/AidlResponseHandler.java     | 14 ++++++++++++++
+ 3 files changed, 33 insertions(+)
+
+diff --git a/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsController.java b/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsController.java
+index 57af042c3ffd..205c276bbc50 100644
+--- a/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsController.java
++++ b/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsController.java
+@@ -290,6 +290,10 @@ public class UdfpsController implements DozeReceiver, Dumpable {
+             new WakefulnessLifecycle.Observer() {
+                 @Override
+                 public void onStartedGoingToSleep() {
++                if (mOverlay != null) {
++                    Log.d(TAG, "[UDFPS-Fix] Screen going to sleep, force removing UDFPS overlay");
++                    hideUdfpsOverlay();
++                }
+                     mLatencyTracker.onActionCancel(
+                             ACTION_UDFPS_OVERLAY_ATTACHED_AFTER_GOING_TO_SLEEP);
+                     mLatencyTracker.onActionStart(
+diff --git a/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsControllerOverlay.kt b/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsControllerOverlay.kt
+index a80a96dc53f4..52eed1e15ec7 100644
+--- a/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsControllerOverlay.kt
++++ b/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsControllerOverlay.kt
+@@ -202,6 +202,9 @@ constructor(
+ 
+                             overlayAttachStateListener?.let { addOnAttachStateChangeListener(it) }
+                             addViewNowOrLater(this, null)
++                            this.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
++                                updateGestureExclusionRect(this)
++                            }
+                             when (requestReason) {
+                                 REASON_AUTH_KEYGUARD ->
+                                     UdfpsTouchOverlayBinder.bind(
+@@ -297,6 +300,7 @@ constructor(
+                 // no need to update any layouts. Instead the correct params will be used when the
+                 // view is eventually added.
+                 windowManager.updateViewLayout(it, coreLayoutParams.updateDimensions(null))
++                updateGestureExclusionRect(it)
+             }
+         }
+     }
+@@ -415,6 +419,17 @@ constructor(
+         // on the keyguard, make sure we don't rotate if we're going to sleep or not occluded
+         return !(keyguardUpdateMonitor.isGoingToSleep || !keyguardStateController.isOccluded)
+     }
++    private fun updateGestureExclusionRect(view: android.view.View) {
++        view.post {
++            val globalRect = android.graphics.Rect()
++            if (view.getGlobalVisibleRect(globalRect) && !globalRect.isEmpty) {
++                view.systemGestureExclusionRects = listOf(globalRect)
++                if (Build.IS_DEBUGGABLE) {
++                    Log.d(TAG, "[UDFPS-Fix] systemGestureExclusionRects = $globalRect")
++                }
++            }
++        }
++    }
+ }
+ 
+ @RequestReason
+diff --git a/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/AidlResponseHandler.java b/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/AidlResponseHandler.java
+index 80b7cde3124c..ecdc6cb0f3fe 100644
+--- a/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/AidlResponseHandler.java
++++ b/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/AidlResponseHandler.java
+@@ -66,6 +66,9 @@ public class AidlResponseHandler extends ISessionCallback.Stub {
+ 
+     private static final String TAG = "AidlResponseHandler";
+ 
++    private int mError10108Count = 0;
++    private static final int MAX_10108_COUNT = 5;
++
+     @NonNull
+     private final Context mContext;
+     @NonNull
+@@ -150,6 +153,17 @@ public class AidlResponseHandler extends ISessionCallback.Stub {
+ 
+     @Override
+     public void onError(byte error, int vendorCode) {
++        if (error == 1 && vendorCode == 10108) {
++            mError10108Count++;
++            if (mError10108Count <= MAX_10108_COUNT) {
++                Slog.w(TAG, "[UDFPS-Fix] Ignoring 10108 (count=" + mError10108Count + ")");
++                return;
++            } else {
++                Slog.e(TAG, "[UDFPS-Fix] Too many 10108 errors, forcing session close.");
++            }
++        } else {
++            mError10108Count = 0;
++        }
+         onError(AidlConversionUtils.toFrameworkError(error), vendorCode);
+     }
+ 
+-- 
+2.54.0
+
