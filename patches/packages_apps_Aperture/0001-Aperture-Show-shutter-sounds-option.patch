@@ -1,0 +1,57 @@
+From 7d1938ae8e9ef4ab40a35ce35c1ce49cdc245027 Mon Sep 17 00:00:00 2001
+From: RobertGarciaa <chae0218@naver.com>
+Date: Sat, 18 Apr 2026 11:49:02 +0900
+Subject: [PATCH] Aperture: Show shutter sounds option
+
+Change-Id: Id7bf555e761cea0f5b05ec1b38a59b1d4ccaa145
+Signed-off-by: RobertGarciaa <chae0218@naver.com>
+---
+ .../main/java/org/lineageos/aperture/SettingsActivity.kt    | 2 +-
+ .../java/org/lineageos/aperture/utils/CameraSoundsUtils.kt  | 6 +++---
+ 2 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/app/src/main/java/org/lineageos/aperture/SettingsActivity.kt b/app/src/main/java/org/lineageos/aperture/SettingsActivity.kt
+index 0040e85..c8e5bad 100644
+--- a/app/src/main/java/org/lineageos/aperture/SettingsActivity.kt
++++ b/app/src/main/java/org/lineageos/aperture/SettingsActivity.kt
+@@ -205,7 +205,7 @@ class SettingsActivity : AppCompatActivity(R.layout.activity_settings) {
+                         true
+                     }
+             }
+-            shutterSound?.isVisible = !CameraSoundsUtils.mustPlaySounds
++            shutterSound?.isVisible = true
+ 
+             // Photo capture mode
+             photoCaptureMode.onPreferenceChangeListener = photoCaptureModePreferenceChangeListener
+diff --git a/app/src/main/java/org/lineageos/aperture/utils/CameraSoundsUtils.kt b/app/src/main/java/org/lineageos/aperture/utils/CameraSoundsUtils.kt
+index fefb972..47f6452 100644
+--- a/app/src/main/java/org/lineageos/aperture/utils/CameraSoundsUtils.kt
++++ b/app/src/main/java/org/lineageos/aperture/utils/CameraSoundsUtils.kt
+@@ -19,13 +19,13 @@ class CameraSoundsUtils(private val preferencesRepository: PreferencesRepository
+     }
+ 
+     fun playShutterClick() {
+-        if (preferencesRepository.shutterSound.value || mustPlaySounds) {
++        if (preferencesRepository.shutterSound.value) {
+             mediaActionSound.play(MediaActionSound.SHUTTER_CLICK)
+         }
+     }
+ 
+     fun playStartVideoRecording(): Boolean {
+-        if (preferencesRepository.shutterSound.value || mustPlaySounds) {
++        if (preferencesRepository.shutterSound.value) {
+             mediaActionSound.play(MediaActionSound.START_VIDEO_RECORDING)
+             return true
+         }
+@@ -33,7 +33,7 @@ class CameraSoundsUtils(private val preferencesRepository: PreferencesRepository
+     }
+ 
+     fun playStopVideoRecording() {
+-        if (preferencesRepository.shutterSound.value || mustPlaySounds) {
++        if (preferencesRepository.shutterSound.value) {
+             mediaActionSound.play(MediaActionSound.STOP_VIDEO_RECORDING)
+         }
+     }
+-- 
+2.43.0
+
