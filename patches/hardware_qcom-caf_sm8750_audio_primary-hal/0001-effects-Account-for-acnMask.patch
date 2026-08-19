@@ -1,0 +1,29 @@
+From 785799ed701c306631b5c9638ea4ef84fcd9ba70 Mon Sep 17 00:00:00 2001
+From: Bruno Martins <bgcngm@gmail.com>
+Date: Sat, 27 Jun 2026 16:14:13 +0100
+Subject: [PATCH] effects: Account for 'acnMask'
+
+Change-Id: I708554e85399f15eb847051f390eab7564b9396a
+---
+ hal/effects/include/effect-impl/EffectTypes.h | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/hal/effects/include/effect-impl/EffectTypes.h b/hal/effects/include/effect-impl/EffectTypes.h
+index d756350b..937ec658 100644
+--- a/hal/effects/include/effect-impl/EffectTypes.h
++++ b/hal/effects/include/effect-impl/EffectTypes.h
+@@ -172,6 +172,11 @@ constexpr size_t getChannelCount(
+             return __builtin_popcount(layout.get<Tag::layoutMask>() & mask);
+         case Tag::voiceMask:
+             return __builtin_popcount(layout.get<Tag::voiceMask>() & mask);
++        case Tag::acnMask:
++            // acnMask specifies channel count.
++            return layout.get<Tag::acnMask>() &
++                   ::aidl::android::media::audio::common::AudioChannelLayout::
++                           ACN_CHANNEL_COUNT_BIT_MASK;
+     }
+     return 0;
+ }
+-- 
+2.43.0
+
