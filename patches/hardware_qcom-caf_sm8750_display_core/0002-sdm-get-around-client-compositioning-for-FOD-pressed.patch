@@ -1,0 +1,58 @@
+From 39f57bca64f0f7ac2cf8446e4e72fc8d75950a58 Mon Sep 17 00:00:00 2001
+From: Demon Singur <demonsingur@gmail.com>
+Date: Sun, 23 Aug 2020 13:21:47 +0200
+Subject: [PATCH 2/4] sdm: get around client compositioning for FOD pressed
+ layer
+
+Change-Id: I51a1a447003076d7bf50d526355cbce98660052b
+---
+ sdm/include/core/layer_stack.h | 2 ++
+ sdm/libs/dal/hw_device_drm.cpp | 3 ++-
+ sdmclient/sdm_display.cpp      | 4 ++++
+ 3 files changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/sdm/include/core/layer_stack.h b/sdm/include/core/layer_stack.h
+index b1957ec..3c5f1ca 100755
+--- a/sdm/include/core/layer_stack.h
++++ b/sdm/include/core/layer_stack.h
+@@ -428,6 +428,8 @@ struct LayerStackFlags {
+       uint32_t front_buffer_layer_present : 1;  //!< Set if stack has front buffer layer.
+ 
+       uint32_t only_video_updating : 1;  //!< This flag indicates only video layers are updating
++
++      uint32_t fod_pressed_present : 1;
+     };
+ 
+     uint32_t flags = 0;               //!< For initialization purpose only.
+diff --git a/sdm/libs/dal/hw_device_drm.cpp b/sdm/libs/dal/hw_device_drm.cpp
+index f80147e..f4fbb51 100644
+--- a/sdm/libs/dal/hw_device_drm.cpp
++++ b/sdm/libs/dal/hw_device_drm.cpp
+@@ -1786,7 +1786,8 @@ void HWDeviceDRM::SetupAtomic(Fence::ScopedRef &scoped_ref, HWLayersInfo *hw_lay
+ 
+ #ifdef UDFPS_ZPOS
+           uint32_t z_order = pipe_info->z_order;
+-          if (layer.flags.fod_pressed) {
++          if (layer.flags.fod_pressed ||
++              (hw_layers_info->flags.fod_pressed_present && i == hw_layer_count - 1)) {
+             z_order |= FOD_PRESSED_LAYER_ZORDER;
+           }
+           drm_atomic_intf_->Perform(DRMOps::PLANE_SET_ZORDER, pipe_id, z_order);
+diff --git a/sdmclient/sdm_display.cpp b/sdmclient/sdm_display.cpp
+index 8eae22e..34a66b9 100644
+--- a/sdmclient/sdm_display.cpp
++++ b/sdmclient/sdm_display.cpp
+@@ -843,6 +843,10 @@ void SDMDisplay::BuildLayerStack() {
+ #ifdef UDFPS_ZPOS
+     if (sdm_layer->IsFodPressed()) {
+       layer->flags.fod_pressed = true;
++      layer_stack_.flags.fod_pressed_present = true;
++    } else {
++      layer->flags.fod_pressed = false;
++      layer_stack_.flags.fod_pressed_present = false;
+     }
+ #endif
+ 
+-- 
+2.43.0
+

@@ -1,0 +1,47 @@
+From 1c19294208986b0a4e1c7322cc4ca674458c6460 Mon Sep 17 00:00:00 2001
+From: Giovanni Ricca <giovanniricca@proton.me>
+Date: Fri, 27 Feb 2026 09:01:48 +0100
+Subject: [PATCH 3/3] hal: Define `oplus_udfps` soong variable
+
+Change-Id: I30af23ffed7bc32748d7f195815b08e6d4c824c6
+---
+ Android.bp | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/Android.bp b/Android.bp
+index ff07e145..7730e76d 100644
+--- a/Android.bp
++++ b/Android.bp
+@@ -8,6 +8,7 @@ soong_config_module_type {
+         "llvmsa",
+         "gralloc4",
+         "udfps",
++        "oplus_udfps",
+         "samsung_udfps",
+         "default",
+         "var3",
+@@ -25,6 +26,7 @@ soong_config_module_type {
+         "ldflags",
+         "native_coverage",
+ 	"vendor",
++        "include_dirs",
+     ],
+ }
+ 
+@@ -155,6 +157,13 @@ qtidisplay_cc_defaults {
+         udfps: {
+             cflags: ["-DUDFPS_ZPOS"],
+         },
++        oplus_udfps: {
++            cflags: [
++                "-DCONNECTOR_PROP_UDFPS",
++                "-DOPLUS_FINGERPRINT_MASK",
++            ],
++            include_dirs: ["frameworks/native/services/surfaceflinger/CompositionEngine/include/compositionengine"],
++        },
+         samsung_udfps: {
+             cflags: [
+                 "-DCONNECTOR_PROP_UDFPS",
+-- 
+2.43.0
+

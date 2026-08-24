@@ -1,0 +1,100 @@
+From 34e9c6c120d9073a3b821a04a52d46556409eb9f Mon Sep 17 00:00:00 2001
+From: pjgowtham <pjgowtham@gmail.com>
+Date: Thu, 22 May 2025 12:46:34 +0530
+Subject: [PATCH 4/4] sdm: Operate FINGERPRINT_MASK for oplus optical UDFPS
+
+Even though oplus calls the connector property hbm_enable, its function
+is not just limited to operating HBM. It is also responsible for other
+aspects of UDFPS operations like that of setFpPress so that we don't
+have to handle any of these through IOCTL.
+
+The purpose of this DRM connector property is for the userspace to let
+the kernel display and fingerprint drivers know which layers are
+visible. The same can be achieved by asserting with the layer name
+instead of setting a magic constant for the layer ZOrder.
+
+Here's what stock uses:
+
+| Bit index | Decimal | Layer       | Z-order      |
+| --------- | ------- | ----------- | ------------ |
+| 0         | 1       | **dim**     | `0x41000005` |
+| 1         | 2       | **pressed** | `0x41000033` |
+| 2         | 4       | **icon**    | `0x41000032` |
+| 3         | 8       | **aod**     | `0x41000011` |
+
+Change-Id: I9fcb119bbebf44b2cd13fb465c09cd9d332013ed
+---
+ sde-drm/drm_property.cpp       |  2 +-
+ sdm/libs/dal/hw_device_drm.cpp | 36 ++++++++++++++++++++++++++++++++++
+ 2 files changed, 37 insertions(+), 1 deletion(-)
+
+diff --git a/sde-drm/drm_property.cpp b/sde-drm/drm_property.cpp
+index bdea27d..d66df6a 100644
+--- a/sde-drm/drm_property.cpp
++++ b/sde-drm/drm_property.cpp
+@@ -270,7 +270,7 @@ DRMProperty DRMPropertyManager::GetPropertyEnum(const std::string &name) const {
+   if (name == "usecase_idx") { return DRMProperty::USECASE_IDX; }
+   if (name == "brightness") { return DRMProperty::BRIGHTNESS; }
+ #ifdef CONNECTOR_PROP_UDFPS
+-  if (name == "fingerprint_mask") { return DRMProperty::FINGERPRINT_MASK; }
++  if (name == "fingerprint_mask" || name == "hbm_enable") { return DRMProperty::FINGERPRINT_MASK; }
+ #endif
+ 
+   return DRMProperty::INVALID;
+diff --git a/sdm/libs/dal/hw_device_drm.cpp b/sdm/libs/dal/hw_device_drm.cpp
+index 7dccf2b..6353788 100644
+--- a/sdm/libs/dal/hw_device_drm.cpp
++++ b/sdm/libs/dal/hw_device_drm.cpp
+@@ -74,6 +74,22 @@
+ 
+ #include "hw_device_drm.h"
+ 
++#ifdef OPLUS_FINGERPRINT_MASK
++#define BIT(nr) (1UL << (nr))
++enum oplus_ofp_property_value {
++    OPLUS_OFP_PROPERTY_NONE = 0,
++    OPLUS_OFP_PROPERTY_DIM_LAYER = BIT(0),
++    OPLUS_OFP_PROPERTY_FINGERPRESS_LAYER = BIT(1),
++    OPLUS_OFP_PROPERTY_ICON_LAYER = BIT(2),
++    OPLUS_OFP_PROPERTY_AOD_LAYER = BIT(3),
++};
++
++#include <UdfpsExtension.h>
++#ifdef UDFPS_TOUCHED_LAYER_NAME
++#undef UDFPS_TOUCHED_LAYER_NAME
++#define UDFPS_TOUCHED_LAYER_NAME "SurfaceView[UdfpsControllerOverlay]"
++#endif
++#endif
+ #ifdef UDFPS_ZPOS
+ #include <display/drm/sde_drm.h>
+ #endif
+@@ -1652,6 +1668,26 @@ void HWDeviceDRM::SetupAtomic(Fence::ScopedRef &scoped_ref, HWLayersInfo *hw_lay
+                        self_refresh;
+   bool update_luts = hw_layers_info->common_info->updates_mask.test(kUpdateLuts);
+ 
++#ifdef OPLUS_FINGERPRINT_MASK
++  if (hw_panel_info_.is_primary_panel) {
++    uint32_t mask_state = 0;
++
++    for (uint32_t i = 0; i < hw_layer_count; i++) {
++      const std::string &name = hw_layers_info->hw_layers[i].layer_name;
++      if (name.find(UDFPS_DIM_LAYER_NAME) != std::string::npos) {
++        mask_state |= OPLUS_OFP_PROPERTY_DIM_LAYER;
++      } else if (name.find(UDFPS_TOUCHED_LAYER_NAME) != std::string::npos) {
++        mask_state |= OPLUS_OFP_PROPERTY_FINGERPRESS_LAYER;
++      }
++    }
++
++    if (current_mask_state_ != mask_state) {
++      current_mask_state_ = mask_state;
++      drm_atomic_intf_->Perform(DRMOps::CONNECTOR_SET_FINGERPRINT_MASK, token_.conn_id, mask_state);
++    }
++  }
++#endif
++
+ #ifdef SEC_FINGERPRINT_MASK
+   if (hw_panel_info_.is_primary_panel) {
+     uint32_t mask_state = 0;
+-- 
+2.43.0
+

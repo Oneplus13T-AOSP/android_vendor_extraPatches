@@ -1,0 +1,181 @@
+From f402e2f8877e547b9a59592dd74875a51ee9c039 Mon Sep 17 00:00:00 2001
+From: Atakan <ata.kaner03@gmail.com>
+Date: Fri, 6 Dec 2024 12:30:45 +0300
+Subject: [PATCH 3/4] sdm: Support HBM for Samsung optical UDFPS
+
+Samsung reads the FINGERPRINT_MASK property from display-drivers to
+enable fingerprint HBM.
+
+This change registers the property and enables HBM when a fod_pressed or
+dim layer (i.e. fingerprint mask for HBM) is present.
+
+Change-Id: I200d06d1e17dbad55715d4fc8e1ce812ff0f0ec9
+---
+ libdrmutils/drm_interface.h    |  8 ++++++++
+ sde-drm/drm_atomic_req.cpp     |  3 +++
+ sde-drm/drm_connector.cpp      | 18 ++++++++++++++++++
+ sde-drm/drm_property.cpp       |  3 +++
+ sde-drm/drm_property.h         |  3 +++
+ sdm/libs/dal/hw_device_drm.cpp | 34 ++++++++++++++++++++++++++++++++++
+ sdm/libs/dal/hw_device_drm.h   |  3 +++
+ 7 files changed, 72 insertions(+)
+
+diff --git a/libdrmutils/drm_interface.h b/libdrmutils/drm_interface.h
+index 1bbedb6..04c2cb4 100644
+--- a/libdrmutils/drm_interface.h
++++ b/libdrmutils/drm_interface.h
+@@ -683,6 +683,14 @@ enum struct DRMOps {
+    *      uint32_t - Brightness Level
+    */
+   CONNECTOR_SET_BRIGHTNESS,
++#ifdef CONNECTOR_PROP_UDFPS
++  /*
++   * Op: Sets fingerprint mask on this connector
++   * Arg: uint32_t - Connector ID
++   *      uint32_t - fingerprint mask
++   */
++  CONNECTOR_SET_FINGERPRINT_MASK,
++#endif
+ };
+ 
+ enum struct DRMRotation {
+diff --git a/sde-drm/drm_atomic_req.cpp b/sde-drm/drm_atomic_req.cpp
+index 600a5fa..32ac431 100644
+--- a/sde-drm/drm_atomic_req.cpp
++++ b/sde-drm/drm_atomic_req.cpp
+@@ -204,6 +204,9 @@ int DRMAtomicReq::Perform(DRMOps opcode, uint32_t obj_id, ...) {
+     case DRMOps::CONNECTOR_SET_BPP_MODE:
+     case DRMOps::CONNECTOR_SET_AVR_STEP_STATE:
+     case DRMOps::CONNECTOR_SET_FRAME_INTERVAL:
++#ifdef CONNECTOR_PROP_UDFPS
++    case DRMOps::CONNECTOR_SET_FINGERPRINT_MASK:
++#endif
+     case DRMOps::CONNECTOR_SET_USECASE_IDX: {
+       drm_mgr_->GetConnectorMgr()->Perform(opcode, obj_id, drm_atomic_req_, args);
+     } break;
+diff --git a/sde-drm/drm_connector.cpp b/sde-drm/drm_connector.cpp
+index dbae70f..422d4e1 100644
+--- a/sde-drm/drm_connector.cpp
++++ b/sde-drm/drm_connector.cpp
+@@ -1387,6 +1387,24 @@ void DRMConnector::Perform(DRMOps code, drmModeAtomicReq *req, va_list args) {
+         DRM_LOGD("Connector %d: Setting compression mode %lu", obj_id, drm_compression_mode);
+       }
+     } break;
++#ifdef CONNECTOR_PROP_UDFPS
++    case DRMOps::CONNECTOR_SET_FINGERPRINT_MASK: {
++      if (!prop_mgr_.IsPropertyAvailable(DRMProperty::FINGERPRINT_MASK)) {
++        DRM_LOGE("DRMConnector::%s: Connector %d: Fingerprint property is not available",
++                 __FUNCTION__, obj_id);
++        return;
++      }
++      uint32_t fingerprint_mask = va_arg(args, uint32_t);
++      uint32_t prop_id = prop_mgr_.GetPropertyId(DRMProperty::FINGERPRINT_MASK);
++      int ret = drmModeAtomicAddProperty(req, obj_id, prop_id, fingerprint_mask);
++      if (ret < 0) {
++        DRM_LOGE("AtomicAddProperty failed obj_id 0x%x, prop_id %d mode %d ret %d",
++                 obj_id, prop_id, fingerprint_mask, ret);
++      } else {
++        DRM_LOGD("Connector %d: Setting Fingerprint mode %d", obj_id, fingerprint_mask);
++      }
++    } break;
++#endif
+ 
+     case DRMOps::CONNECTOR_SET_TRANSFER_TIME: {
+       if (!prop_mgr_.IsPropertyAvailable(DRMProperty::DYN_TRANSFER_TIME)) {
+diff --git a/sde-drm/drm_property.cpp b/sde-drm/drm_property.cpp
+index a38bd4c..bdea27d 100644
+--- a/sde-drm/drm_property.cpp
++++ b/sde-drm/drm_property.cpp
+@@ -269,6 +269,9 @@ DRMProperty DRMPropertyManager::GetPropertyEnum(const std::string &name) const {
+   if (name == "frame_interval") { return DRMProperty::FRAME_INTERVAL; }
+   if (name == "usecase_idx") { return DRMProperty::USECASE_IDX; }
+   if (name == "brightness") { return DRMProperty::BRIGHTNESS; }
++#ifdef CONNECTOR_PROP_UDFPS
++  if (name == "fingerprint_mask") { return DRMProperty::FINGERPRINT_MASK; }
++#endif
+ 
+   return DRMProperty::INVALID;
+ }
+diff --git a/sde-drm/drm_property.h b/sde-drm/drm_property.h
+index 5f659cb..880339f 100644
+--- a/sde-drm/drm_property.h
++++ b/sde-drm/drm_property.h
+@@ -265,6 +265,9 @@ enum struct DRMProperty {
+   FRAME_INTERVAL,
+   USECASE_IDX,
+   BRIGHTNESS,
++#ifdef CONNECTOR_PROP_UDFPS
++  FINGERPRINT_MASK,
++#endif
+ 
+   // Insert above
+   MAX
+diff --git a/sdm/libs/dal/hw_device_drm.cpp b/sdm/libs/dal/hw_device_drm.cpp
+index f4fbb51..7dccf2b 100644
+--- a/sdm/libs/dal/hw_device_drm.cpp
++++ b/sdm/libs/dal/hw_device_drm.cpp
+@@ -1429,6 +1429,17 @@ DisplayError HWDeviceDRM::PowerOff(bool teardown, SyncPoints *sync_points) {
+     pending_power_state_ = kPowerStateOff;
+     return kErrorDeferred;
+   }
++#ifdef SEC_FINGERPRINT_MASK
++  if (hw_panel_info_.is_primary_panel) {
++    if (current_mask_state_) {
++      current_mask_state_ = 0;
++      drm_atomic_intf_->Perform(DRMOps::CONNECTOR_SET_FINGERPRINT_MASK,
++          token_.conn_id, current_mask_state_);
++      DLOGI("Display:%d Setting Fingerprint inDisplay Layer property = %d",
++            display_id_, current_mask_state_);
++    }
++  }
++#endif
+ 
+   ResetROI();
+   ClearSolidfillStages();
+@@ -1641,6 +1652,29 @@ void HWDeviceDRM::SetupAtomic(Fence::ScopedRef &scoped_ref, HWLayersInfo *hw_lay
+                        self_refresh;
+   bool update_luts = hw_layers_info->common_info->updates_mask.test(kUpdateLuts);
+ 
++#ifdef SEC_FINGERPRINT_MASK
++  if (hw_panel_info_.is_primary_panel) {
++    uint32_t mask_state = 0;
++
++    for (uint32_t i = 0; i < hw_layer_count; i++) {
++      Layer &layer = hw_layers_info->hw_layers.at(i);
++      if (layer.flags.fod_pressed ||
++          (hw_layers_info->flags.fod_pressed_present && i == hw_layer_count - 1)) {
++        mask_state = 1;
++        break;
++      }
++    }
++    drm_atomic_intf_->Perform(DRMOps::CONNECTOR_SET_FINGERPRINT_MASK,
++        token_.conn_id, mask_state);
++
++    if (current_mask_state_ != mask_state) {
++      current_mask_state_ = mask_state;
++      DLOGI("Display:%d Setting Fingerprint inDisplay Layer property = %d",
++            display_id_, current_mask_state_);
++    }
++  }
++#endif
++
+   if (hw_panel_info_.partial_update && update_config) {
+     if (IsFullFrameUpdate(*hw_layers_info)) {
+       ResetROI();
+diff --git a/sdm/libs/dal/hw_device_drm.h b/sdm/libs/dal/hw_device_drm.h
+index 6858a8d..2fa5d84 100644
+--- a/sdm/libs/dal/hw_device_drm.h
++++ b/sdm/libs/dal/hw_device_drm.h
+@@ -412,6 +412,9 @@ class HWDeviceDRM : public HWInterface {
+   std::unique_ptr<HWColorManagerDrm> hw_color_mgr_ = {};
+   bool seamless_mode_switch_ = false;
+   float aspect_ratio_threshold_ = 1.0;
++#ifdef CONNECTOR_PROP_UDFPS
++  uint32_t current_mask_state_ = 0;
++#endif
+ };
+ 
+ }  // namespace sdm
+-- 
+2.43.0
+

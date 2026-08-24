@@ -1,0 +1,39 @@
+From 3a56c4f73a40d546697c7a4b08714a557b2b50e5 Mon Sep 17 00:00:00 2001
+From: Giovanni Ricca <giovanniricca@proton.me>
+Date: Thu, 26 Feb 2026 20:59:00 +0100
+Subject: [PATCH 2/3] hal: Define `samsung_udfps` soong variable
+
+Change-Id: I9401178f66ec6e3bb2aa8aa200c1f38cfe897445
+---
+ Android.bp | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/Android.bp b/Android.bp
+index c552f487..ff07e145 100644
+--- a/Android.bp
++++ b/Android.bp
+@@ -8,6 +8,7 @@ soong_config_module_type {
+         "llvmsa",
+         "gralloc4",
+         "udfps",
++        "samsung_udfps",
+         "default",
+         "var3",
+         "llvmcov",
+@@ -154,6 +155,13 @@ qtidisplay_cc_defaults {
+         udfps: {
+             cflags: ["-DUDFPS_ZPOS"],
+         },
++        samsung_udfps: {
++            cflags: [
++                "-DCONNECTOR_PROP_UDFPS",
++                "-DSEC_FINGERPRINT_MASK",
++                "-DUDFPS_ZPOS",
++            ],
++        },
+         var3 : {
+             enabled: false,
+             conditions_default: {
+-- 
+2.43.0
+
