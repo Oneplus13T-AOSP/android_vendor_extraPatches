@@ -1,0 +1,25 @@
+From b0af8301c6f8271051554de5bc1bb2da8636f5f7 Mon Sep 17 00:00:00 2001
+From: Robertgarciaa <chae0218@naver.com>
+Date: Thu, 27 Aug 2026 12:39:22 +0900
+Subject: [PATCH] Build Recorder app
+
+Signed-off-by: Robertgarciaa <chae0218@naver.com>
+---
+ config/common_full_phone.mk | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/config/common_full_phone.mk b/config/common_full_phone.mk
+index 004dea2..aa011fe 100644
+--- a/config/common_full_phone.mk
++++ b/config/common_full_phone.mk
+@@ -3,3 +3,7 @@ $(call inherit-product, vendor/lineage/config/common_full_phone.mk)
+ 
+ # Inherit some common PixelOS stuff.
+ $(call inherit-product, vendor/custom/config/common.mk)
++
++# Recorder
++PRODUCT_PACKAGES += \
++    Recorder
+-- 
+2.43.0
+
