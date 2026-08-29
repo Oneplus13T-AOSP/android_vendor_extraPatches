@@ -1,0 +1,64 @@
+From 89727591c37fcc0377acd68471d1988243e20514 Mon Sep 17 00:00:00 2001
+From: John Galt <johngaltfirstrun@gmail.com>
+Date: Wed, 14 Jan 2026 09:46:54 -0500
+Subject: [PATCH 04/16] surfaceflinger: allow overriding min supported frame
+ rate
+
+Based on 39e8590263123212777ed9cfb8b9b72f2ca4a94c
+---
+ services/surfaceflinger/Android.bp                   |  5 +++++
+ .../surfaceflinger/Scheduler/RefreshRateSelector.h   | 12 +++++++++++-
+ 2 files changed, 16 insertions(+), 1 deletion(-)
+
+diff --git a/services/surfaceflinger/Android.bp b/services/surfaceflinger/Android.bp
+index 9ce2a46..f28f360 100644
+--- a/services/surfaceflinger/Android.bp
++++ b/services/surfaceflinger/Android.bp
+@@ -109,6 +109,11 @@ cc_defaults {
+             "-DFRAME_RATE_CATEGORY_HIGH=" + value,
+         ],
+         default: [],
++    }) + select(soong_config_variable("surfaceflinger", "frame_rate_category_min"), {
++        any @ value: [
++            "-DFRAME_RATE_CATEGORY_MIN=" + value,
++        ],
++        default: [],
+     }),
+ }
+ 
+diff --git a/services/surfaceflinger/Scheduler/RefreshRateSelector.h b/services/surfaceflinger/Scheduler/RefreshRateSelector.h
+index 0d3c0c9..db031d7 100644
+--- a/services/surfaceflinger/Scheduler/RefreshRateSelector.h
++++ b/services/surfaceflinger/Scheduler/RefreshRateSelector.h
+@@ -42,9 +42,15 @@ using namespace std::chrono_literals;
+ 
+ using FrameRateOverride = DisplayEventReceiver::Event::FrameRateOverride;
+ 
+-#ifdef FRAME_RATE_CATEGORY_HIGH
++#if defined(FRAME_RATE_CATEGORY_HIGH) || defined(FRAME_RATE_CATEGORY_MIN)
+ constexpr Fps intToFps(int val) {
+     switch(val) {
++        case 1: return 1_Hz;
++        case 2: return 2_Hz;
++        case 5: return 5_Hz;
++        case 10: return 10_Hz;
++        case 20: return 20_Hz;
++        case 30: return 30_Hz;
+         case 60: return 60_Hz;
+         case 90: return 90_Hz;
+         case 120: return 120_Hz;
+@@ -64,7 +70,11 @@ public:
+             std::chrono::nanoseconds(800us).count();
+ 
+     // The lowest Render Frame Rate that will ever be selected
++#ifdef FRAME_RATE_CATEGORY_MIN
++    static constexpr Fps kMinSupportedFrameRate = intToFps(FRAME_RATE_CATEGORY_MIN);
++#else
+     static constexpr Fps kMinSupportedFrameRate = 20_Hz;
++#endif
+ 
+     // Start range for FrameRateCategory Normal and High.
+ #ifdef FRAME_RATE_CATEGORY_HIGH
+-- 
+2.47.3
+

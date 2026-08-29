@@ -1,0 +1,45 @@
+From b626e69561c9708119702a9b4a5623f2861d6c44 Mon Sep 17 00:00:00 2001
+From: John Galt <johngaltfirstrun@gmail.com>
+Date: Fri, 5 Jun 2026 12:52:10 -0400
+Subject: [PATCH 08/16] surfaceflinger: specifically no vote status bar
+
+Stops clock updates, battery or signal changes, or network monitor (if
+configured to be shown in status bar) from voting at all.
+
+Change-Id: Ic5e13a51224ef53a080caf7c72c42819ccb727d1
+---
+ services/surfaceflinger/Layer.h                    | 2 ++
+ services/surfaceflinger/Scheduler/LayerHistory.cpp | 4 ++++
+ 2 files changed, 6 insertions(+)
+
+diff --git a/services/surfaceflinger/Layer.h b/services/surfaceflinger/Layer.h
+index 90b5538..6104d18 100644
+--- a/services/surfaceflinger/Layer.h
++++ b/services/surfaceflinger/Layer.h
+@@ -367,6 +367,8 @@ public:
+ 
+     virtual uid_t getOwnerUid() const { return mOwnerUid; }
+ 
++    gui::WindowInfo::Type getWindowType() const { return mWindowType; }
++
+     // Used to check if mUsedVsyncIdForRefreshRateSelection should be expired when it stop updating.
+     nsecs_t mMaxTimeForUseVsyncId = 0;
+     // True when DrawState.useVsyncIdForRefreshRateSelection previously set to true during updating
+diff --git a/services/surfaceflinger/Scheduler/LayerHistory.cpp b/services/surfaceflinger/Scheduler/LayerHistory.cpp
+index 205bbcf..f4e1afc 100644
+--- a/services/surfaceflinger/Scheduler/LayerHistory.cpp
++++ b/services/surfaceflinger/Scheduler/LayerHistory.cpp
+@@ -355,6 +355,10 @@ void LayerHistory::partitionLayers(nsecs_t now) {
+                 info->resetLayerVote();
+             }
+ 
++	    if (it->second.first->getWindowType() == gui::WindowInfo::Type::STATUS_BAR) {
++                info->setLayerVote({LayerVoteType::NoVote, Fps()});
++            }
++
+             it++;
+         } else {
+             if (CC_UNLIKELY(mTraceEnabled)) {
+-- 
+2.47.3
+

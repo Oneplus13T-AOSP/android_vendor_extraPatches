@@ -1,0 +1,69 @@
+From 026ef54a2eea75f0b82b582d20796df1d6878cdc Mon Sep 17 00:00:00 2001
+From: John Galt <johngaltfirstrun@gmail.com>
+Date: Thu, 29 May 2025 10:35:05 -0400
+Subject: [PATCH 03/16] surfaceflinger: allow overriding
+ FrameRateCategoryRateHigh
+
+---
+ services/surfaceflinger/Android.bp             |  7 ++++++-
+ .../Scheduler/RefreshRateSelector.h            | 18 ++++++++++++++++++
+ 2 files changed, 24 insertions(+), 1 deletion(-)
+
+diff --git a/services/surfaceflinger/Android.bp b/services/surfaceflinger/Android.bp
+index 2b92092..9ce2a46 100644
+--- a/services/surfaceflinger/Android.bp
++++ b/services/surfaceflinger/Android.bp
+@@ -104,7 +104,12 @@ cc_defaults {
+         "-Wthread-safety",
+         "-Wunreachable-code",
+         "-Wunused",
+-    ],
++    ] + select(soong_config_variable("surfaceflinger", "frame_rate_category_high"), {
++        any @ value: [
++            "-DFRAME_RATE_CATEGORY_HIGH=" + value,
++        ],
++        default: [],
++    }),
+ }
+ 
+ cc_defaults {
+diff --git a/services/surfaceflinger/Scheduler/RefreshRateSelector.h b/services/surfaceflinger/Scheduler/RefreshRateSelector.h
+index 2d1415c..0d3c0c9 100644
+--- a/services/surfaceflinger/Scheduler/RefreshRateSelector.h
++++ b/services/surfaceflinger/Scheduler/RefreshRateSelector.h
+@@ -40,6 +40,20 @@ namespace android::scheduler {
+ 
+ using namespace std::chrono_literals;
+ 
++using FrameRateOverride = DisplayEventReceiver::Event::FrameRateOverride;
++
++#ifdef FRAME_RATE_CATEGORY_HIGH
++constexpr Fps intToFps(int val) {
++    switch(val) {
++        case 60: return 60_Hz;
++        case 90: return 90_Hz;
++        case 120: return 120_Hz;
++        case 144: return 144_Hz;
++        default: return 90_Hz; // fallback default
++    }
++}
++#endif
++
+ // Selects the refresh rate of a display by ranking its `DisplayModes` in accordance with
+ // the DisplayManager (or override) `Policy`, the `LayerRequirement` of each active layer,
+ // and `GlobalSignals`.
+@@ -53,7 +67,11 @@ public:
+     static constexpr Fps kMinSupportedFrameRate = 20_Hz;
+ 
+     // Start range for FrameRateCategory Normal and High.
++#ifdef FRAME_RATE_CATEGORY_HIGH
++    static constexpr Fps kFrameRateCategoryRateHigh = intToFps(FRAME_RATE_CATEGORY_HIGH);
++#else
+     static constexpr Fps kFrameRateCategoryRateHigh = 90_Hz;
++#endif
+     static constexpr Fps kFrameRateCategoryRateNormal = 60_Hz;
+     static constexpr std::pair<Fps, Fps> kFrameRateCategoryRates = {kFrameRateCategoryRateNormal,
+                                                                     kFrameRateCategoryRateHigh};
+-- 
+2.47.3
+
