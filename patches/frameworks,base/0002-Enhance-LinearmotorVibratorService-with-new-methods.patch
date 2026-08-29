@@ -1,0 +1,101 @@
+From b39dff1e016dcd77cabf9007d62621228beb4219 Mon Sep 17 00:00:00 2001
+From: Kill3rEz <98993017+Kill3rEz@users.noreply.github.com>
+Date: Fri, 10 Jul 2026 12:43:59 +0200
+Subject: [PATCH 2/5] Enhance LinearmotorVibratorService with new methods
+
+Updated the vibrate method to include uid, opPkg, and token parameters. Added new methods for canceling vibration, getting vibrator status, and managing settings related to vibration strength and styles. For fixing vibration on Oplus Camera
+---
+ .../vibrator/LinearmotorVibratorService.java  | 56 ++++++++++++++++++-
+ 1 file changed, 55 insertions(+), 1 deletion(-)
+
+diff --git a/services/core/java/com/android/server/vibrator/LinearmotorVibratorService.java b/services/core/java/com/android/server/vibrator/LinearmotorVibratorService.java
+index c98a0c508..6d3877203 100644
+--- a/services/core/java/com/android/server/vibrator/LinearmotorVibratorService.java
++++ b/services/core/java/com/android/server/vibrator/LinearmotorVibratorService.java
+@@ -7,6 +7,7 @@ package com.android.server.vibrator;
+ 
+ import android.content.Context;
+ import android.os.Binder;
++import android.os.IBinder;
+ import android.os.VibrationEffect;
+ import android.os.Vibrator;
+ import android.util.Slog;
+@@ -16,6 +17,7 @@ import com.android.server.SystemService;
+ import com.oplus.os.ILinearmotorVibratorService;
+ import com.oplus.os.WaveformEffect;
+ 
++
+ public class LinearmotorVibratorService extends SystemService {
+ 
+     private static final String TAG = "LinearmotorVibratorService";
+@@ -29,7 +31,7 @@ public class LinearmotorVibratorService extends SystemService {
+ 
+     private final ILinearmotorVibratorService.Stub mService = new ILinearmotorVibratorService.Stub() {
+         @Override
+-        public void vibrate(WaveformEffect effect) {
++        public void vibrate(int uid, String opPkg, WaveformEffect effect, IBinder token) {
+             synchronized (mLock) {
+                 final long ident = Binder.clearCallingIdentity();
+                 try {
+@@ -41,6 +43,58 @@ public class LinearmotorVibratorService extends SystemService {
+                 }
+             }
+         }
++
++        @Override
++        public void cancelVibrate(WaveformEffect effect, IBinder token) {
++            synchronized (mLock) {
++                mVibrator.cancel();
++            }
++        }
++
++        @Override
++        public int getVibratorStatus() {
++            return 0; // always ready
++        }
++
++        @Override
++        public void setVibratorStrength(int strength) {
++            // no-op
++        }
++
++        @Override
++        public int getSettingsTouchEffectStrength() {
++            return 2400;
++        }
++
++        @Override
++        public int getSettingsRingtoneEffectStrength() {
++            return 2400;
++        }
++
++        @Override
++        public int getSettingsNotificationEffectStrength() {
++            return 2400;
++        }
++
++        @Override
++        public int getVibratorTouchStyle() {
++            return 0;
++        }
++
++        @Override
++        public void setVibratorTouchStyle(int style) {
++            // no-op
++        }
++
++        @Override
++        public void updateVibrationAmplitude(int uid, String opPkg, float amplitudeRatio) {
++            // no-op
++        }
++
++        @Override
++        public boolean checkRichtapBlackList(String packageName) {
++            return false;
++        }
+     };
+ 
+     public LinearmotorVibratorService(Context context) {
+-- 
+2.47.3
+

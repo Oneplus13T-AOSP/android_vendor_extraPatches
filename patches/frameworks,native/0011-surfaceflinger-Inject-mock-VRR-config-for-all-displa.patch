@@ -1,0 +1,68 @@
+From 4453771e183b3fc6504bcbe6c183cdc3cc1da94a Mon Sep 17 00:00:00 2001
+From: likw <1912283462@qq.com>
+Date: Mon, 15 Jun 2026 14:03:21 +0800
+Subject: [PATCH 11/16] surfaceflinger: Inject mock VRR config for all display
+ modes
+
+Some vendor HALs (e.g., Oplus/QTI) do not report valid VRR
+configurations for all display modes to SurfaceFlinger. This results
+in hasArrSupport being evaluated as false for those modes, which
+disables the AOSP Adaptive Refresh Rate (ARR) engine.
+
+Inject a mock VrrConfig for all display modes that lack one, setting
+minFrameIntervalNs to the mode's vsyncPeriod. This enables VRR support
+for 60/90/120Hz modes and allows the framework to properly dispatch
+idle/render rate signals to the kernel for hardware LTPO.
+---
+ services/surfaceflinger/Android.bp         |  5 +++++
+ services/surfaceflinger/SurfaceFlinger.cpp | 12 +++++++++++-
+ 2 files changed, 16 insertions(+), 1 deletion(-)
+
+diff --git a/services/surfaceflinger/Android.bp b/services/surfaceflinger/Android.bp
+index 563ac18..ce2b16e 100644
+--- a/services/surfaceflinger/Android.bp
++++ b/services/surfaceflinger/Android.bp
+@@ -124,6 +124,11 @@ cc_defaults {
+             "-DARR_USE_OPLUS_LTPO_REFRESH_RATES=1",
+         ],
+         default: [],
++    }) + select(soong_config_variable("surfaceflinger", "vrrr_injection_mock"), {
++        any @ value: [
++            "-DINJECT_MOCK_VRR_HAL=1",
++        ],
++        default: [],
+     }),
+ }
+ 
+diff --git a/services/surfaceflinger/SurfaceFlinger.cpp b/services/surfaceflinger/SurfaceFlinger.cpp
+index 6b36a85..445a82c 100644
+--- a/services/surfaceflinger/SurfaceFlinger.cpp
++++ b/services/surfaceflinger/SurfaceFlinger.cpp
+@@ -4196,13 +4196,23 @@ std::pair<DisplayModes, DisplayModePtr> SurfaceFlinger::loadDisplayModes(
+     DisplayModes newModes;
+     for (const auto& hwcMode : hwcModes) {
+         const auto id = nextModeId++;
++        auto vrrConfig = hwcMode.vrrConfig;
++
++#ifdef INJECT_MOCK_VRR_HAL
++    if (!vrrConfig.has_value()) {
++            using VrrConfigType = decltype(hwcMode.vrrConfig)::value_type;
++            VrrConfigType mockVrr;
++            mockVrr.minFrameIntervalNs = hwcMode.vsyncPeriod;
++            vrrConfig = mockVrr;
++    }
++#endif
+         newModes.try_emplace(id,
+                              DisplayMode::Builder(hwcMode.hwcId)
+                                      .setId(id)
+                                      .setPhysicalDisplayId(displayId)
+                                      .setResolution({hwcMode.width, hwcMode.height})
+                                      .setVsyncPeriod(hwcMode.vsyncPeriod)
+-                                     .setVrrConfig(hwcMode.vrrConfig)
++                                     .setVrrConfig(vrrConfig)
+                                      .setDpiX(hwcMode.dpiX)
+                                      .setDpiY(hwcMode.dpiY)
+                                      .setGroup(hwcMode.configGroup)
+-- 
+2.47.3
+

@@ -1,0 +1,344 @@
+From 94e5830bdfb47a6b1b8fdce637009aed7c9a8319 Mon Sep 17 00:00:00 2001
+From: cjh1249131356 <cjh1249131356@gmail.com>
+Date: Tue, 16 Jun 2026 04:55:11 +0000
+Subject: [PATCH 1/5] base: Implement mock oplus LinearmotorVibratorService
+
+---
+ .../android/app/SystemServiceRegistry.java    | 11 +++
+ core/java/android/content/Context.java        | 10 ++
+ .../oplus/os/ILinearmotorVibratorService.aidl | 13 +++
+ .../com/oplus/os/LinearmotorVibrator.java     | 44 +++++++++
+ core/java/com/oplus/os/WaveformEffect.aidl    |  8 ++
+ core/java/com/oplus/os/WaveformEffect.java    | 97 +++++++++++++++++++
+ .../vibrator/LinearmotorVibratorService.java  | 55 +++++++++++
+ .../java/com/android/server/SystemServer.java |  5 +
+ 8 files changed, 243 insertions(+)
+ create mode 100644 core/java/com/oplus/os/ILinearmotorVibratorService.aidl
+ create mode 100644 core/java/com/oplus/os/LinearmotorVibrator.java
+ create mode 100644 core/java/com/oplus/os/WaveformEffect.aidl
+ create mode 100644 core/java/com/oplus/os/WaveformEffect.java
+ create mode 100644 services/core/java/com/android/server/vibrator/LinearmotorVibratorService.java
+
+diff --git a/core/java/android/app/SystemServiceRegistry.java b/core/java/android/app/SystemServiceRegistry.java
+index cc0e7b5cb..552f419e1 100644
+--- a/core/java/android/app/SystemServiceRegistry.java
++++ b/core/java/android/app/SystemServiceRegistry.java
+@@ -27,6 +27,8 @@ import static android.permission.flags.Flags.assistSettingsPrivacyImprovementsEn
+ import static android.provider.flags.Flags.newStoragePublicApi;
+ import static android.service.chooser.Flags.interactiveChooser;
+ 
++import com.oplus.os.ILinearmotorVibratorService;
++import com.oplus.os.LinearmotorVibrator;
+ import android.accounts.AccountManager;
+ import android.accounts.IAccountManager;
+ import android.adservices.AdServicesFrameworkInitializer;
+@@ -1998,6 +2000,15 @@ public final class SystemServiceRegistry {
+                     }
+                 });
+ 
++       registerService(Context.LINEARMOTOR_VIBRATOR_SERVICE, LinearmotorVibrator.class,
++                new CachedServiceFetcher<LinearmotorVibrator>() {
++                  @Override
++                  public LinearmotorVibrator createService(ContextImpl ctx) {
++                    IBinder binder = ServiceManager.getService(Context.LINEARMOTOR_VIBRATOR_SERVICE);
++                    ILinearmotorVibratorService service = ILinearmotorVibratorService.Stub.asInterface(binder);
++                    return new LinearmotorVibrator(ctx.getOuterContext(), service);
++                  }});
++
+         registerService(Context.SUPERVISION_SERVICE, SupervisionManager.class,
+                 new CachedServiceFetcher<>() {
+                     @Override
+diff --git a/core/java/android/content/Context.java b/core/java/android/content/Context.java
+index f0bd86d90..0304ae9bc 100644
+--- a/core/java/android/content/Context.java
++++ b/core/java/android/content/Context.java
+@@ -7264,6 +7264,16 @@ public abstract class Context {
+     @RequiresFeature(PackageManager.FEATURE_WEBVIEW)
+     public static final String WEBVIEW_UPDATE_SERVICE = "webviewupdate";
+ 
++    /**
++     * Use with {@link #getSystemService} to retrieve a
++     * {@link com.oplus.os.LinearmotorVibrator} for accessing linear motor vibrator state.
++     *
++     * @hide
++     * @see #getSystemService
++     * @see com.oplus.os.LinearmotorVibrator
++     */
++    public static final String LINEARMOTOR_VIBRATOR_SERVICE = "linearmotor";
++
+     /**
+      * Use with {@link #getSystemService(String)} to retrieve a
+      * {@link android.provider.BlockedNumbersManager} for accessing the blocked number service.
+diff --git a/core/java/com/oplus/os/ILinearmotorVibratorService.aidl b/core/java/com/oplus/os/ILinearmotorVibratorService.aidl
+new file mode 100644
+index 000000000..0461a1c2f
+--- /dev/null
++++ b/core/java/com/oplus/os/ILinearmotorVibratorService.aidl
+@@ -0,0 +1,13 @@
++/*
++ * Copyright (C) 2022 The Nameless-AOSP Project
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++package com.oplus.os;
++
++import com.oplus.os.WaveformEffect;
++
++/** @hide */
++interface ILinearmotorVibratorService {
++    void vibrate(in WaveformEffect effect);
++}
+diff --git a/core/java/com/oplus/os/LinearmotorVibrator.java b/core/java/com/oplus/os/LinearmotorVibrator.java
+new file mode 100644
+index 000000000..489074efd
+--- /dev/null
++++ b/core/java/com/oplus/os/LinearmotorVibrator.java
+@@ -0,0 +1,44 @@
++/*
++ * Copyright (C) 2022 The Nameless-AOSP Project
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++package com.oplus.os;
++
++import android.annotation.SystemService;
++import android.content.Context;
++import android.os.RemoteException;
++import android.util.Slog;
++
++/**
++ * @hide
++ */
++@SystemService(Context.LINEARMOTOR_VIBRATOR_SERVICE)
++public class LinearmotorVibrator {
++
++    private static final String TAG = "LinearmotorVibrator";
++
++    private final ILinearmotorVibratorService mService;
++
++    public LinearmotorVibrator(Context context, ILinearmotorVibratorService service) {
++        mService = service;
++        if (service == null) {
++            Slog.v(TAG, "ILinearmotorVibratorService was null");
++        }
++    }
++
++    /**
++     * @hide
++     */
++    public void vibrate(WaveformEffect effect) {
++        if (mService == null || effect == null) {
++            Slog.d(TAG, "ignore vibrate in favor of invalid params.");
++            return;
++        }
++        try {
++            mService.vibrate(effect);
++        } catch (RemoteException e) {
++            throw e.rethrowFromSystemServer();
++        }
++    }
++}
+diff --git a/core/java/com/oplus/os/WaveformEffect.aidl b/core/java/com/oplus/os/WaveformEffect.aidl
+new file mode 100644
+index 000000000..8d821aee2
+--- /dev/null
++++ b/core/java/com/oplus/os/WaveformEffect.aidl
+@@ -0,0 +1,8 @@
++/*
++ * Copyright (C) 2022 The Nameless-AOSP Project
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++package com.oplus.os;
++
++parcelable WaveformEffect;
+diff --git a/core/java/com/oplus/os/WaveformEffect.java b/core/java/com/oplus/os/WaveformEffect.java
+new file mode 100644
+index 000000000..8466f78be
+--- /dev/null
++++ b/core/java/com/oplus/os/WaveformEffect.java
+@@ -0,0 +1,97 @@
++/*
++ * Copyright (C) 2022 The Nameless-AOSP Project
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++package com.oplus.os;
++
++import android.os.Parcel;
++import android.os.Parcelable;
++import android.util.Slog;
++
++public class WaveformEffect implements Parcelable {
++
++    private static final String TAG = "WaveformEffect";
++
++    public static final Parcelable.Creator<WaveformEffect> CREATOR =
++            new Parcelable.Creator<WaveformEffect>() {
++        @Override
++        public WaveformEffect createFromParcel(Parcel in) {
++            return new WaveformEffect(in);
++        }
++
++        @Override
++        public WaveformEffect[] newArray(int size) {
++            return new WaveformEffect[size];
++        }
++    };
++
++    private int mEffectType;
++    private boolean mEffectLoop;
++
++    private WaveformEffect() {
++        mEffectType = -1;
++        mEffectLoop = false;
++    }
++
++    public int getEffectType() {
++        return mEffectType;
++    }
++
++    public boolean getEffectLoop() {
++        return mEffectLoop;
++    }
++
++    public static class Builder {
++        private int mEffectType;
++        private boolean mEffectLoop;
++
++        public Builder() {
++            mEffectType = -1;
++            mEffectLoop = false;
++        }
++
++        public Builder(WaveformEffect effect) {
++            mEffectType = -1;
++            mEffectLoop = false;
++        }
++
++        public WaveformEffect build() {
++            WaveformEffect effect = new WaveformEffect();
++            effect.mEffectType = mEffectType;
++            effect.mEffectLoop = mEffectLoop;
++            return effect;
++        }
++
++        public Builder setEffectType(int type) {
++            mEffectType = type;
++            return this;
++        }
++
++        public Builder setEffectLoop(boolean loop) {
++            mEffectLoop = loop;
++            return this;
++        }
++    }
++
++    @Override
++    public int describeContents() {
++        return 0;
++    }
++
++    @Override
++    public void writeToParcel(Parcel dest, int flags) {
++        dest.writeInt(mEffectType);
++        dest.writeBoolean(mEffectLoop);
++    }
++
++    private WaveformEffect(Parcel in) {
++        mEffectType = in.readInt();
++        mEffectLoop = in.readBoolean();
++    }
++
++    @Override
++    public String toString() {
++        return String.valueOf(mEffectType);
++    }
++}
+diff --git a/services/core/java/com/android/server/vibrator/LinearmotorVibratorService.java b/services/core/java/com/android/server/vibrator/LinearmotorVibratorService.java
+new file mode 100644
+index 000000000..c98a0c508
+--- /dev/null
++++ b/services/core/java/com/android/server/vibrator/LinearmotorVibratorService.java
+@@ -0,0 +1,55 @@
++/*
++ * Copyright (C) 2022 The Nameless-AOSP Project
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++package com.android.server.vibrator;
++
++import android.content.Context;
++import android.os.Binder;
++import android.os.VibrationEffect;
++import android.os.Vibrator;
++import android.util.Slog;
++
++import com.android.server.SystemService;
++
++import com.oplus.os.ILinearmotorVibratorService;
++import com.oplus.os.WaveformEffect;
++
++public class LinearmotorVibratorService extends SystemService {
++
++    private static final String TAG = "LinearmotorVibratorService";
++
++    private static final VibrationEffect EFFECT_CLICK =
++            VibrationEffect.createPredefined(VibrationEffect.EFFECT_CLICK);
++
++    private final Vibrator mVibrator;
++
++    private final Object mLock = new Object();
++
++    private final ILinearmotorVibratorService.Stub mService = new ILinearmotorVibratorService.Stub() {
++        @Override
++        public void vibrate(WaveformEffect effect) {
++            synchronized (mLock) {
++                final long ident = Binder.clearCallingIdentity();
++                try {
++                    Slog.d(TAG, "WaveformEffect: " + effect);
++                    // Currently maps all incoming effects to a standard EFFECT_CLICK
++                    mVibrator.vibrate(EFFECT_CLICK);
++                } finally {
++                    Binder.restoreCallingIdentity(ident);
++                }
++            }
++        }
++    };
++
++    public LinearmotorVibratorService(Context context) {
++        super(context);
++        mVibrator = context.getSystemService(Vibrator.class);
++    }
++
++    @Override
++    public void onStart() {
++        publishBinderService(Context.LINEARMOTOR_VIBRATOR_SERVICE, mService);
++    }
++}
+diff --git a/services/java/com/android/server/SystemServer.java b/services/java/com/android/server/SystemServer.java
+index 99aa6afc4..52fd33f0a 100644
+--- a/services/java/com/android/server/SystemServer.java
++++ b/services/java/com/android/server/SystemServer.java
+@@ -319,6 +319,7 @@ import com.android.server.usage.StorageStatsService;
+ import com.android.server.usage.UsageStatsService;
+ import com.android.server.usb.UsbService;
+ import com.android.server.utils.TimingsTraceAndSlog;
++import com.android.server.vibrator.LinearmotorVibratorService;
+ import com.android.server.vibrator.VibratorManagerService;
+ import com.android.server.voiceinteraction.VoiceInteractionManagerService;
+ import com.android.server.wallpaper.WallpaperManagerService;
+@@ -2923,6 +2924,10 @@ public final class SystemServer implements Dumpable {
+             t.traceEnd();
+         }
+ 
++        t.traceBegin("StartLinearmotorVibratorService");
++        mSystemServiceManager.startService(LinearmotorVibratorService.class);
++        t.traceEnd();
++
+         t.traceBegin("StartMediaProjectionManager");
+         mSystemServiceManager.startService(MediaProjectionManagerService.class);
+         t.traceEnd();
+-- 
+2.47.3
+

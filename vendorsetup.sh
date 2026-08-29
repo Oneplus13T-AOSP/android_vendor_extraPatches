@@ -6,7 +6,7 @@ apply_patches() {
     PATCHES_PATH=${TOP}/vendor/extraPatches/patches
 
     for project_name in $(cd "${PATCHES_PATH}"; echo */); do
-        project_path="$(tr _ / <<<$project_name)"
+        project_path="${project_name//,//}"
         cd ${TOP}
         cd ${project_path}
         echo "Applying patches for project: ${project_name} on ${HEAD_COMMIT}"
