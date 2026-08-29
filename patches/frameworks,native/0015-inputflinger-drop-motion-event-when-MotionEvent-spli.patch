@@ -1,0 +1,34 @@
+From f7811f36816ed3826c7f45f03beb166c2a375dfc Mon Sep 17 00:00:00 2001
+From: likw <1912283462@qq.com>
+Date: Sat, 20 Jun 2026 10:31:46 +0800
+Subject: [PATCH 15/16] inputflinger: drop motion event when
+ MotionEvent::split() fails
+
+When MotionEvent::split() returns an error (e.g., pointer count mismatch
+between the bitmask and the actual event), drop the event instead of
+crashing system_server with LOG(FATAL).
+---
+ services/inputflinger/dispatcher/InputDispatcher.cpp | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/services/inputflinger/dispatcher/InputDispatcher.cpp b/services/inputflinger/dispatcher/InputDispatcher.cpp
+index 4dd7ada..4425bd2 100644
+--- a/services/inputflinger/dispatcher/InputDispatcher.cpp
++++ b/services/inputflinger/dispatcher/InputDispatcher.cpp
+@@ -4507,9 +4507,10 @@ std::unique_ptr<MotionEntry> InputDispatcher::splitMotionEvent(
+                                originalMotionEntry.pointerCoords, pointerIds,
+                                [&]() { return originalMotionEntry.getDescription(); });
+     if (!result.ok()) {
+-        logDispatchStateLocked();
+-        LOG(FATAL) << "Could not split motion: " << originalMotionEntry
+-                   << ", pointers: " << pointerIds << " : " << result.error();
++        ALOGW("Could not split motion: %s, pointers: %s : %s",
++              originalMotionEntry.getDescription().c_str(),
++              pointerIds.to_string().c_str(),
++              result.error().message().c_str());
+         return nullptr;
+     }
+     const auto& [action, pointerProperties, pointerCoords] = *result;
+-- 
+2.47.3
+

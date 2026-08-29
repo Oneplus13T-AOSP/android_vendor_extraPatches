@@ -1,0 +1,48 @@
+From 6bcc17a64d30d0e7db388aaf19cca68b09d32e74 Mon Sep 17 00:00:00 2001
+From: cjh1249131356 <cjh1249131356@gmail.com>
+Date: Sun, 25 Sep 2022 14:56:49 +0800
+Subject: [PATCH] sepolicy: Label LinearmotorVibratorService
+
+Signed-off-by: Pranav Vashi <neobuddy89@gmail.com>
+---
+ common/private/service.te       | 3 +++
+ common/private/service_contexts | 3 +++
+ common/private/system_server.te | 3 +++
+ 3 files changed, 9 insertions(+)
+
+diff --git a/common/private/service.te b/common/private/service.te
+index c570430..f13b27f 100644
+--- a/common/private/service.te
++++ b/common/private/service.te
+@@ -6,3 +6,6 @@ type lineage_livedisplay_service, system_api_service, system_server_service, ser
+ type lineage_profile_service, system_api_service, system_server_service, service_manager_type;
+ type lineage_sensitive_phone_numbers_service, system_api_service, system_server_service, service_manager_type;
+ type lineage_trust_service, system_api_service, system_server_service, service_manager_type;
++
++# Linearmotor Vibrator
++type linearmotor_vibrator_service, system_api_service, system_server_service, service_manager_type;
+diff --git a/common/private/service_contexts b/common/private/service_contexts
+index eee1784..ead2460 100644
+--- a/common/private/service_contexts
++++ b/common/private/service_contexts
+@@ -7,3 +7,6 @@ lineagetrust                              u:object_r:lineage_trust_service:s0
+ profile                                   u:object_r:lineage_profile_service:s0
+ 
+ adbroot_service                           u:object_r:adbroot_service:s0
++
++# Linearmotor Vibrator
++linearmotor                               u:object_r:linearmotor_vibrator_service:s0
+diff --git a/common/private/system_server.te b/common/private/system_server.te
+index d2fbdf5..b73b32b 100644
+--- a/common/private/system_server.te
++++ b/common/private/system_server.te
+@@ -13,3 +13,6 @@ get_prop(system_server, camera2_extensions_prop)
+ 
+ # Let system server toggle xtra-daemon
+ set_prop(system_server, xtra_control_prop)
++
++# Linearmotor Vibrator
++add_service(system_server, linearmotor_vibrator_service);
+-- 
+2.55.0
+

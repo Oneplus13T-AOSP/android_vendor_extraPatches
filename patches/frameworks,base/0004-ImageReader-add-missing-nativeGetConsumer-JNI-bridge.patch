@@ -1,0 +1,125 @@
+From 1f1356a614a31a4d731cb67380dd8617c60cdb5c Mon Sep 17 00:00:00 2001
+From: 1vivy <1vivy@tutanota.com>
+Date: Mon, 29 Jun 2026 00:29:27 -0600
+Subject: [PATCH 3/5] ImageReader: add missing nativeGetConsumer JNI bridge for
+ OnePlus APS
+
+LOS regression: stock OOS framework.jar declares
+android.media.ImageReader.nativeGetConsumer and stock
+libandroid_runtime.so exports the JNI, but LOS has neither.
+
+The OnePlus camera SDK (ApsUtils.getConsumerPtr, ApsUtils.java:570,
+via ApsVideoAdapterImpl.java:221 KEY_CONSUMER_PTR) reflects
+ImageReader.nativeGetConsumer() to obtain the native
+IGraphicBufferConsumer* and hand it to the native APS
+addPreviewFrameBuff path, attaching a zero-copy preview consumer.
+Without this method the SDK throws NoSuchMethodException ~528x/session,
+loses the APS zero-copy consumer attach, falls back to per-frame buffer
+handling, and produces a preview buffer-return backlog that drives the
+motion-photo engagement flakiness and "falls behind" freeze.
+
+RE of stock OOS libandroid_runtime.so (infiniti CPH2745 OOS 16.0.8):
+- Java contract: private native synchronized long nativeGetConsumer()
+  on android.media.ImageReader (not SurfaceImage), JNI sig ()J
+- JNI semantics: returns the IGraphicBufferConsumer* that backs the
+  BufferItemConsumer (ConsumerBase::mConsumer.get()), cast to jlong
+
+Implementation:
+- core/java/android/media/ImageReader.java: add native method decl
+- core/jni/android_media_ImageReader.cpp: add ImageReader_getConsumer
+  returning bufferConsumer->getIGraphicBufferConsumer().get() cast to
+  jlong; register as {"nativeGetConsumer","()J",...} inside the
+  existing #ifdef __ANDROID__ block (host-build libgui stub in
+  libs/hostgraphics/ does not expose getIGraphicBufferConsumer);
+  suppress -Wdeprecated-declarations pragma at the call site
+
+Mirrors the already-committed getOplusHardwareBuffer bridge.
+Incremental build of libandroid_runtime + framework-minus-apex passed;
+nativeGetConsumer string confirmed in built device libandroid_runtime.so.
+Full flash validation pending.
+
+[realahnet]: Migrate to soong select
+---
+ core/java/android/media/ImageReader.java |  6 ++++
+ core/jni/android_media_ImageReader.cpp   | 41 ++++++++++++++++++++++++
+ 2 files changed, 47 insertions(+)
+
+diff --git a/core/java/android/media/ImageReader.java b/core/java/android/media/ImageReader.java
+index b26f4cc57..c446efe1f 100644
+--- a/core/java/android/media/ImageReader.java
++++ b/core/java/android/media/ImageReader.java
+@@ -1455,6 +1455,12 @@ public class ImageReader implements AutoCloseable {
+     private synchronized native void nativeReleaseImage(Image i);
+     private synchronized native Surface nativeGetSurface();
+     private synchronized native int nativeDetachImage(Image i, boolean throwISEOnly);
++    // OnePlus camera (APS) extension: returns the native IGraphicBufferConsumer pointer that
++    // backs this ImageReader. The OnePlus camera SDK (ApsUtils.getConsumerPtr) calls this
++    // reflectively to attach a zero-copy preview consumer in the native APS path; without it
++    // the SDK throws NoSuchMethodException, loses the APS zero-copy consumer attach and falls
++    // back to per-frame buffer handling.
++    private synchronized native long nativeGetConsumer();
+     private synchronized native void nativeDiscardFreeBuffers();
+ 
+     /**
+diff --git a/core/jni/android_media_ImageReader.cpp b/core/jni/android_media_ImageReader.cpp
+index 1a84de9b8..8ac5aab74 100644
+--- a/core/jni/android_media_ImageReader.cpp
++++ b/core/jni/android_media_ImageReader.cpp
+@@ -330,6 +330,44 @@ static BufferItemConsumer* ImageReader_getBufferConsumer(JNIEnv* env, jobject th
+     return ctx->getBufferConsumer();
+ }
+ 
++#if defined(__ANDROID__) && defined(TARGET_SHIPS_OPLUS_CAM)
++// OnePlus camera (APS) extension. Mirrors stock libandroid_runtime's
++// ImageReader.nativeGetConsumer: returns the IGraphicBufferConsumer that backs this
++// ImageReader's BufferItemConsumer as a raw native pointer (jlong). The OnePlus camera
++// SDK (ApsUtils.getConsumerPtr) reflects this method and hands the pointer to the native
++// APS addPreviewFrameBuff path to attach a zero-copy preview consumer. Without it the SDK
++// throws NoSuchMethodException, loses the APS zero-copy consumer attach and falls back to
++// per-frame buffer handling, producing a preview buffer-return backlog. The returned
++// IGraphicBufferConsumer stays alive via ConsumerBase::mConsumer (the BufferItemConsumer
++// holds a strong reference for its lifetime), matching stock semantics.
++// Gated on __ANDROID__ because the host-build libgui stub (libs/hostgraphics/) does not
++// expose getIGraphicBufferConsumer(); this method is only meaningful on-device anyway.
++static jlong ImageReader_getConsumer(JNIEnv* env, jobject thiz)
++{
++    ALOGV("%s:", __FUNCTION__);
++    JNIImageReaderContext* const ctx = ImageReader_getContext(env, thiz);
++    if (ctx == NULL) {
++        jniThrowRuntimeException(env, "ImageReaderContext is not initialized");
++        return 0;
++    }
++
++    BufferItemConsumer* bufferConsumer = ctx->getBufferConsumer();
++    if (bufferConsumer == NULL) {
++        jniThrowRuntimeException(env, "Buffer consumer is uninitialized");
++        return 0;
++    }
++
++    // getIGraphicBufferConsumer() is marked deprecated upstream as a refactoring signal,
++    // but it is the only public API path to the IGraphicBufferConsumer from outside the
++    // ConsumerBase class hierarchy. This is an intentional OEM compatibility bridge; the
++    // deprecation warning is suppressed here rather than being propagated as a build error.
++#pragma GCC diagnostic push
++#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
++    return reinterpret_cast<jlong>(bufferConsumer->getIGraphicBufferConsumer().get());
++#pragma GCC diagnostic pop
++}
++#endif
++
+ static void Image_setBufferItem(JNIEnv* env, jobject thiz,
+         const BufferItem* buffer)
+ {
+@@ -1030,6 +1068,9 @@ static const JNINativeMethod gImageReaderMethods[] =
+          {"nativeGetSurface", "()Landroid/view/Surface;", (void*)ImageReader_getSurface},
+          {"nativeDetachImage", "(Landroid/media/Image;Z)I", (void*)ImageReader_detachImage},
+ #ifdef __ANDROID__
++#ifdef TARGET_SHIPS_OPLUS_CAM
++         {"nativeGetConsumer", "()J", (void*)ImageReader_getConsumer},
++#endif // TARGET_SHIPS_OPLUS_CAM
+          {"nativeCreateImagePlanes",
+           "(ILandroid/graphics/GraphicBuffer;IIIIII)[Landroid/media/ImageReader$ImagePlane;",
+           (void*)ImageReader_createImagePlanes},
+-- 
+2.47.3
+

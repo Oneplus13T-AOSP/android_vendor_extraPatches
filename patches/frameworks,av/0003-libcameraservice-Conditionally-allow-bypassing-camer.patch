@@ -1,0 +1,50 @@
+From ccb7638647f0a7611e0f3bbd8fddea1e1fd779d7 Mon Sep 17 00:00:00 2001
+From: realahnet <syedmusicrealise@gmail.com>
+Date: Wed, 1 Jul 2026 00:54:38 +0500
+Subject: [PATCH 3/8] libcameraservice: Conditionally allow bypassing camera
+ buffer error if frame timestamp is decreasing
+
+* Some devices may have a bug where the timestamp reported by the HAL seems to have decreasing timestamp with each frame. Bypass this error for such devices
+---
+ services/camera/libcameraservice/Android.bp                | 3 +++
+ services/camera/libcameraservice/device3/Camera3Stream.cpp | 4 ++++
+ 2 files changed, 7 insertions(+)
+
+diff --git a/services/camera/libcameraservice/Android.bp b/services/camera/libcameraservice/Android.bp
+index a223554..eb0d786 100644
+--- a/services/camera/libcameraservice/Android.bp
++++ b/services/camera/libcameraservice/Android.bp
+@@ -254,6 +254,9 @@ cc_library {
+     }) + select(soong_config_variable("camera", "ext_lib"), {
+         any @ flag_val: ["-DTARGET_PROVIDES_CAMERA_PROVIDER_EXT_LIB"],
+         default: [],
++    }) + select(soong_config_variable("camera", "allow_nonincreasing_timestamps"), {
++        any @ value: ["-DALLOW_NONINCREASING_TIMESTAMPS"],
++        default: [],
+     }),
+ 
+     whole_static_libs: select(soong_config_variable("libcameraservice", "ext_lib"), {
+diff --git a/services/camera/libcameraservice/device3/Camera3Stream.cpp b/services/camera/libcameraservice/device3/Camera3Stream.cpp
+index 9e539de..33414b9 100644
+--- a/services/camera/libcameraservice/device3/Camera3Stream.cpp
++++ b/services/camera/libcameraservice/device3/Camera3Stream.cpp
+@@ -795,12 +795,16 @@ status_t Camera3Stream::returnBuffer(const camera_stream_buffer &buffer,
+ 
+     // Buffer status may be changed, so make a copy of the stream_buffer struct.
+     camera_stream_buffer b = buffer;
++#ifdef ALLOW_NONINCREASING_TIMESTAMPS
++    (void)timestampIncreasing;
++#else
+     if (timestampIncreasing && timestamp != 0 && timestamp <= mLastTimestamp
+             && b.status != CAMERA_BUFFER_STATUS_ERROR) {
+         ALOGE("%s: Stream %d: timestamp %" PRId64 " is not increasing. Prev timestamp %" PRId64,
+                 __FUNCTION__, mId, timestamp, mLastTimestamp);
+         b.status = CAMERA_BUFFER_STATUS_ERROR;
+     }
++#endif
+     mLastTimestamp = timestamp;
+ 
+     /**
+-- 
+2.47.3
+

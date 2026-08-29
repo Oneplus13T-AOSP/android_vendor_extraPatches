@@ -1,0 +1,68 @@
+From 33fbb2a5678acfae007ea95283ba924f79a56881 Mon Sep 17 00:00:00 2001
+From: John Galt <johngaltfirstrun@gmail.com>
+Date: Fri, 5 Jun 2026 08:41:53 -0400
+Subject: [PATCH 06/16] surfaceflinger: vrr: apply idle signal to vrr rate
+ policy
+
+Allows signals.idle to reach getRankedFrameRatesLocked, allowing idle
+refresh rate path to select anchor rates. Previously only the overlay
+was updated, making idle signal always false on vrr.
+---
+ .../surfaceflinger/Scheduler/Scheduler.cpp    | 34 +++++++++++--------
+ 1 file changed, 20 insertions(+), 14 deletions(-)
+
+diff --git a/services/surfaceflinger/Scheduler/Scheduler.cpp b/services/surfaceflinger/Scheduler/Scheduler.cpp
+index d53c93d..8388dc9 100644
+--- a/services/surfaceflinger/Scheduler/Scheduler.cpp
++++ b/services/surfaceflinger/Scheduler/Scheduler.cpp
+@@ -172,13 +172,15 @@ void Scheduler::initializeIdleTimer(PhysicalDisplayId displayId) {
+                                     kernelIdleTimerCallback(displayId, TimerState::Expired);
+                                 }},
+              .vrr = {.onReset =
+-                             [this, displayId] {
+-                                 mSchedulerCallback.vrrDisplayIdle(displayId, false);
+-                             },
+-                     .onExpired =
+-                             [this, displayId] {
+-                                 mSchedulerCallback.vrrDisplayIdle(displayId, true);
+-                             }}});
++                              [this, displayId] {
++                                  applyPolicy(&Policy::idleTimers, TimerState::Reset, displayId);
++                                  mSchedulerCallback.vrrDisplayIdle(displayId, false);
++                              },
++                      .onExpired =
++                              [this, displayId] {
++                                  applyPolicy(&Policy::idleTimers, TimerState::Expired, displayId);
++                                  mSchedulerCallback.vrrDisplayIdle(displayId, true);
++                              }}});
+ }
+ 
+ bool Scheduler::designatePacesetterDisplay() {
+@@ -1400,13 +1402,17 @@ void Scheduler::promotePacesetterDisplay(PromotionParams params,
+                                         kernelIdleTimerCallback(*pacesetterId, TimerState::Expired);
+                                     }},
+                  .vrr = {.onReset =
+-                                 [this, pacesetterId] {
+-                                     mSchedulerCallback.vrrDisplayIdle(*pacesetterId, false);
+-                                 },
+-                         .onExpired =
+-                                 [this, pacesetterId] {
+-                                     mSchedulerCallback.vrrDisplayIdle(*pacesetterId, true);
+-                                 }}});
++                                    [this, pacesetterId] {
++                                        applyPolicy(&Policy::idleTimers, TimerState::Reset,
++                                                    *pacesetterId);
++                                        mSchedulerCallback.vrrDisplayIdle(*pacesetterId, false);
++                                    },
++                            .onExpired =
++                                    [this, pacesetterId] {
++                                        applyPolicy(&Policy::idleTimers, TimerState::Expired,
++                                                    *pacesetterId);
++                                        mSchedulerCallback.vrrDisplayIdle(*pacesetterId, true);
++                                    }}});
+ 
+         pacesetter.selectorPtr->startIdleTimer();
+     }
+-- 
+2.47.3
+

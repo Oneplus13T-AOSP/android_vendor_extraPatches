@@ -1,0 +1,37 @@
+From 6b820aee5d4ee1165b00a71f6e692ad7673311c0 Mon Sep 17 00:00:00 2001
+From: likw <1912283462@qq.com>
+Date: Sat, 20 Jun 2026 10:31:39 +0800
+Subject: [PATCH 14/16] inputflinger: drop motion event when
+ firstDownTimeInTarget is missing
+
+When splitting motion events for multi-window delivery, the target must
+have a firstDownTimeInTarget set. If it's missing, drop the event
+instead of crashing system_server with LOG(FATAL).
+---
+ services/inputflinger/dispatcher/InputDispatcher.cpp | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/services/inputflinger/dispatcher/InputDispatcher.cpp b/services/inputflinger/dispatcher/InputDispatcher.cpp
+index 0d27a09..4dd7ada 100644
+--- a/services/inputflinger/dispatcher/InputDispatcher.cpp
++++ b/services/inputflinger/dispatcher/InputDispatcher.cpp
+@@ -3475,11 +3475,11 @@ void InputDispatcher::prepareDispatchCycleLocked(nsecs_t currentTime,
+         const MotionEntry& originalMotionEntry = static_cast<const MotionEntry&>(*eventEntry);
+         if (inputTarget.getPointerIds().count() != originalMotionEntry.getPointerCount()) {
+             if (!inputTarget.firstDownTimeInTarget.has_value()) {
+-                logDispatchStateLocked();
+-                LOG(FATAL) << "Splitting motion events requires a down time to be set for the "
+-                              "target on connection "
+-                           << connection->getInputChannelName() << " for "
+-                           << originalMotionEntry.getDescription();
++                ALOGW("Splitting motion events requires a down time to be set for the "
++                      "target on connection %s for %s, dropping event",
++                      connection->getInputChannelName().c_str(),
++                      originalMotionEntry.getDescription().c_str());
++                return;
+             }
+             std::unique_ptr<MotionEntry> splitMotionEntry =
+                     splitMotionEvent(originalMotionEntry, inputTarget.getPointerIds(),
+-- 
+2.47.3
+
