@@ -1,0 +1,30 @@
+From 3791aba724adc161bcc2d605b33162771ef5005c Mon Sep 17 00:00:00 2001
+From: likw <1912283462@qq.com>
+Date: Fri, 12 Jun 2026 11:52:11 +0800
+Subject: [PATCH 10/16] Revert "surfaceflinger: Fix kernel idle timer fallback
+ for HWC 3.3"
+
+This reverts commit 18e32a2dc7274e7976516d5bfda9744218a3d365.
+---
+ services/surfaceflinger/SurfaceFlinger.cpp | 5 +----
+ 1 file changed, 1 insertion(+), 4 deletions(-)
+
+diff --git a/services/surfaceflinger/SurfaceFlinger.cpp b/services/surfaceflinger/SurfaceFlinger.cpp
+index 3a57451..6b36a85 100644
+--- a/services/surfaceflinger/SurfaceFlinger.cpp
++++ b/services/surfaceflinger/SurfaceFlinger.cpp
+@@ -8102,10 +8102,7 @@ auto SurfaceFlinger::getKernelIdleTimerProperties(PhysicalDisplayId displayId)
+             // and is available before the PowerMode::ON
+             return {KernelIdleTimerController::HwcApi, timeout};
+         }
+-        // HWC claims KernelIdleTimer support but the display does not
+-        // report DISPLAY_IDLE_TIMER capability.  Fall through to the
+-        // sysprop check instead of returning nullopt, otherwise the
+-        // idle timer is never configured and LTPO VRR never activates.
++        return {std::nullopt, timeout};
+     }
+     if (getKernelIdleTimerSyspropConfig(displayId)) {
+         return {KernelIdleTimerController::Sysprop, timeout};
+-- 
+2.47.3
+

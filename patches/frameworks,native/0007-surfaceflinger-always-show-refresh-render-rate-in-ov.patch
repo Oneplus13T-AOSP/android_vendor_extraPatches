@@ -1,0 +1,57 @@
+From 3d0235122674b11f1e59cd9a1352c72ab17f757e Mon Sep 17 00:00:00 2001
+From: John Galt <johngaltfirstrun@gmail.com>
+Date: Fri, 5 Jun 2026 09:52:18 -0400
+Subject: [PATCH 07/16] surfaceflinger: always show refresh/render rate in
+ overlay
+
+---
+ services/surfaceflinger/RefreshRateOverlay.cpp | 16 +++-------------
+ 1 file changed, 3 insertions(+), 13 deletions(-)
+
+diff --git a/services/surfaceflinger/RefreshRateOverlay.cpp b/services/surfaceflinger/RefreshRateOverlay.cpp
+index 9fd1faf..cc3a821 100644
+--- a/services/surfaceflinger/RefreshRateOverlay.cpp
++++ b/services/surfaceflinger/RefreshRateOverlay.cpp
+@@ -25,12 +25,10 @@
+ 
+ namespace android {
+ 
+-auto RefreshRateOverlay::draw(int refreshRate, int renderFps, bool idle, SkColor color,
++auto RefreshRateOverlay::draw(int refreshRate, int renderFps, bool /*idle*/, SkColor color,
+                               ui::Transform::RotationFlags rotation, ftl::Flags<Features> features)
+         -> Buffers {
+     const size_t loopCount = features.test(Features::Spinner) ? 6 : 1;
+-    const bool isSetByHwc = features.test(Features::SetByHwc);
+-
+     Buffers buffers;
+     buffers.reserve(loopCount);
+ 
+@@ -69,11 +67,7 @@ auto RefreshRateOverlay::draw(int refreshRate, int renderFps, bool idle, SkColor
+         canvas->setMatrix(canvasTransform);
+ 
+         int left = 0;
+-        if (idle && !isSetByHwc) {
+-            drawDash(left, *canvas);
+-        } else {
+-            drawNumber(refreshRate, left, color, *canvas);
+-        }
++        drawNumber(refreshRate, left, color, *canvas);
+         left += 3 * (kDigitWidth + kDigitSpace);
+         if (features.test(Features::Spinner)) {
+             switch (i) {
+@@ -106,11 +100,7 @@ auto RefreshRateOverlay::draw(int refreshRate, int renderFps, bool idle, SkColor
+         left += kDigitWidth + kDigitSpace;
+ 
+         if (features.test(Features::RenderRate)) {
+-            if (idle) {
+-                drawDash(left, *canvas);
+-            } else {
+-                drawNumber(renderFps, left, color, *canvas);
+-            }
++            drawNumber(renderFps, left, color, *canvas);
+         }
+         left += 3 * (kDigitWidth + kDigitSpace);
+ 
+-- 
+2.47.3
+

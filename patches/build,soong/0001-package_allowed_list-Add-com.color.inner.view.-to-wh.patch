@@ -1,0 +1,23 @@
+From 4080b35893ebe487b9968ed477e1dec8f8feeee7 Mon Sep 17 00:00:00 2001
+From: osm1019 <osm1019@gmail.com>
+Date: Wed, 15 Jul 2026 13:52:16 +0800
+Subject: [PATCH] package_allowed_list: Add com.color.inner.view.* to whitelist
+
+---
+ scripts/check_boot_jars/package_allowed_list.txt | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/scripts/check_boot_jars/package_allowed_list.txt b/scripts/check_boot_jars/package_allowed_list.txt
+index 26f9c0fe6..d7b35e0c6 100644
+--- a/scripts/check_boot_jars/package_allowed_list.txt
++++ b/scripts/check_boot_jars/package_allowed_list.txt
+@@ -256,3 +256,6 @@ vendor\.lineage\..*
+ # Lineage adds
+ lineageos\.platform
+ org\.lineageos\.platform\.internal
++
++# OnePlus Framework
++com\.color\.inner\.view\.*
+-- 
+2.47.3
+

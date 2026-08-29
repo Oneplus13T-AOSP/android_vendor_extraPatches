@@ -1,0 +1,36 @@
+From 459b9b5cf76e534558ac0f4f2cce6ecddb0a931a Mon Sep 17 00:00:00 2001
+From: likw <1912283462@qq.com>
+Date: Sat, 20 Jun 2026 10:31:58 +0800
+Subject: [PATCH 16/16] inputflinger: drop motion event when split downTime
+ mismatches
+
+When splitting an ACTION_DOWN event, the splitDownTime must match the
+original eventTime. If they mismatch (e.g., due to pointer state
+inconsistency), drop the event instead of crashing system_server with
+LOG_ALWAYS_FATAL.
+---
+ services/inputflinger/dispatcher/InputDispatcher.cpp | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/services/inputflinger/dispatcher/InputDispatcher.cpp b/services/inputflinger/dispatcher/InputDispatcher.cpp
+index 4425bd2..7aa620b 100644
+--- a/services/inputflinger/dispatcher/InputDispatcher.cpp
++++ b/services/inputflinger/dispatcher/InputDispatcher.cpp
+@@ -4533,10 +4533,10 @@ std::unique_ptr<MotionEntry> InputDispatcher::splitMotionEvent(
+     // TODO(b/327503168): Move this check inside MotionEvent::split once all callers handle it
+     //   correctly.
+     if (action == AMOTION_EVENT_ACTION_DOWN && splitDownTime != originalMotionEntry.eventTime) {
+-        logDispatchStateLocked();
+-        LOG_ALWAYS_FATAL("Split motion event has mismatching downTime and eventTime for "
+-                         "ACTION_DOWN, motionEntry=%s, splitDownTime=%" PRId64 "ns",
+-                         originalMotionEntry.getDescription().c_str(), splitDownTime);
++        ALOGW("Split motion event has mismatching downTime and eventTime for "
++              "ACTION_DOWN, motionEntry=%s, splitDownTime=%" PRId64 "ns, dropping event",
++              originalMotionEntry.getDescription().c_str(), splitDownTime);
++        return nullptr;
+     }
+ 
+     int32_t newId = mIdGenerator.nextId();
+-- 
+2.47.3
+

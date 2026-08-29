@@ -1,0 +1,240 @@
+From 85b5479e418adc9585956ed6b8f5d19723d27a5c Mon Sep 17 00:00:00 2001
+From: Kill3rEz <98993017+Kill3rEz@users.noreply.github.com>
+Date: Sat, 11 Jul 2026 13:09:20 +0800
+Subject: [PATCH 4/5] base: Move to vibrator stubs in oplus-fwk for oplus
+ LinearmotorVibratorService
+
+---
+ Android.bp                                    |  2 +
+ .../oplus/os/ILinearmotorVibratorService.aidl | 13 ---
+ .../com/oplus/os/LinearmotorVibrator.java     | 44 ---------
+ core/java/com/oplus/os/WaveformEffect.aidl    |  8 --
+ core/java/com/oplus/os/WaveformEffect.java    | 97 -------------------
+ services/core/Android.bp                      |  1 +
+ 6 files changed, 3 insertions(+), 162 deletions(-)
+ delete mode 100644 core/java/com/oplus/os/ILinearmotorVibratorService.aidl
+ delete mode 100644 core/java/com/oplus/os/LinearmotorVibrator.java
+ delete mode 100644 core/java/com/oplus/os/WaveformEffect.aidl
+ delete mode 100644 core/java/com/oplus/os/WaveformEffect.java
+
+diff --git a/Android.bp b/Android.bp
+index c8fd90503..12417ca51 100644
+--- a/Android.bp
++++ b/Android.bp
+@@ -480,6 +480,7 @@ java_defaults {
+     defaults: ["framework-minus-apex-defaults"],
+     libs: [
+         "framework-non-updatable-unbundled-impl-libs",
++        "oplus-fwk-vibrator-lib",
+     ],
+ }
+ 
+@@ -539,6 +540,7 @@ java_library {
+         // TODO(b/429127828): Clean this up along with RELEASE_TELEPHONY_MODULE
+         "//packages/modules/Telephony:__subpackages__",
+         "//packages/modules/Virtualization:__subpackages__",
++        "//hardware/oplus/oplus-fwk",
+     ],
+     libs: select(release_flag("RELEASE_TELECOM_MAINLINE_MODULE"), {
+         true: [],
+diff --git a/core/java/com/oplus/os/ILinearmotorVibratorService.aidl b/core/java/com/oplus/os/ILinearmotorVibratorService.aidl
+deleted file mode 100644
+index 0461a1c2f..000000000
+--- a/core/java/com/oplus/os/ILinearmotorVibratorService.aidl
++++ /dev/null
+@@ -1,13 +0,0 @@
+-/*
+- * Copyright (C) 2022 The Nameless-AOSP Project
+- * SPDX-License-Identifier: Apache-2.0
+- */
+-
+-package com.oplus.os;
+-
+-import com.oplus.os.WaveformEffect;
+-
+-/** @hide */
+-interface ILinearmotorVibratorService {
+-    void vibrate(in WaveformEffect effect);
+-}
+diff --git a/core/java/com/oplus/os/LinearmotorVibrator.java b/core/java/com/oplus/os/LinearmotorVibrator.java
+deleted file mode 100644
+index 489074efd..000000000
+--- a/core/java/com/oplus/os/LinearmotorVibrator.java
++++ /dev/null
+@@ -1,44 +0,0 @@
+-/*
+- * Copyright (C) 2022 The Nameless-AOSP Project
+- * SPDX-License-Identifier: Apache-2.0
+- */
+-
+-package com.oplus.os;
+-
+-import android.annotation.SystemService;
+-import android.content.Context;
+-import android.os.RemoteException;
+-import android.util.Slog;
+-
+-/**
+- * @hide
+- */
+-@SystemService(Context.LINEARMOTOR_VIBRATOR_SERVICE)
+-public class LinearmotorVibrator {
+-
+-    private static final String TAG = "LinearmotorVibrator";
+-
+-    private final ILinearmotorVibratorService mService;
+-
+-    public LinearmotorVibrator(Context context, ILinearmotorVibratorService service) {
+-        mService = service;
+-        if (service == null) {
+-            Slog.v(TAG, "ILinearmotorVibratorService was null");
+-        }
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    public void vibrate(WaveformEffect effect) {
+-        if (mService == null || effect == null) {
+-            Slog.d(TAG, "ignore vibrate in favor of invalid params.");
+-            return;
+-        }
+-        try {
+-            mService.vibrate(effect);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-}
+diff --git a/core/java/com/oplus/os/WaveformEffect.aidl b/core/java/com/oplus/os/WaveformEffect.aidl
+deleted file mode 100644
+index 8d821aee2..000000000
+--- a/core/java/com/oplus/os/WaveformEffect.aidl
++++ /dev/null
+@@ -1,8 +0,0 @@
+-/*
+- * Copyright (C) 2022 The Nameless-AOSP Project
+- * SPDX-License-Identifier: Apache-2.0
+- */
+-
+-package com.oplus.os;
+-
+-parcelable WaveformEffect;
+diff --git a/core/java/com/oplus/os/WaveformEffect.java b/core/java/com/oplus/os/WaveformEffect.java
+deleted file mode 100644
+index 8466f78be..000000000
+--- a/core/java/com/oplus/os/WaveformEffect.java
++++ /dev/null
+@@ -1,97 +0,0 @@
+-/*
+- * Copyright (C) 2022 The Nameless-AOSP Project
+- * SPDX-License-Identifier: Apache-2.0
+- */
+-
+-package com.oplus.os;
+-
+-import android.os.Parcel;
+-import android.os.Parcelable;
+-import android.util.Slog;
+-
+-public class WaveformEffect implements Parcelable {
+-
+-    private static final String TAG = "WaveformEffect";
+-
+-    public static final Parcelable.Creator<WaveformEffect> CREATOR =
+-            new Parcelable.Creator<WaveformEffect>() {
+-        @Override
+-        public WaveformEffect createFromParcel(Parcel in) {
+-            return new WaveformEffect(in);
+-        }
+-
+-        @Override
+-        public WaveformEffect[] newArray(int size) {
+-            return new WaveformEffect[size];
+-        }
+-    };
+-
+-    private int mEffectType;
+-    private boolean mEffectLoop;
+-
+-    private WaveformEffect() {
+-        mEffectType = -1;
+-        mEffectLoop = false;
+-    }
+-
+-    public int getEffectType() {
+-        return mEffectType;
+-    }
+-
+-    public boolean getEffectLoop() {
+-        return mEffectLoop;
+-    }
+-
+-    public static class Builder {
+-        private int mEffectType;
+-        private boolean mEffectLoop;
+-
+-        public Builder() {
+-            mEffectType = -1;
+-            mEffectLoop = false;
+-        }
+-
+-        public Builder(WaveformEffect effect) {
+-            mEffectType = -1;
+-            mEffectLoop = false;
+-        }
+-
+-        public WaveformEffect build() {
+-            WaveformEffect effect = new WaveformEffect();
+-            effect.mEffectType = mEffectType;
+-            effect.mEffectLoop = mEffectLoop;
+-            return effect;
+-        }
+-
+-        public Builder setEffectType(int type) {
+-            mEffectType = type;
+-            return this;
+-        }
+-
+-        public Builder setEffectLoop(boolean loop) {
+-            mEffectLoop = loop;
+-            return this;
+-        }
+-    }
+-
+-    @Override
+-    public int describeContents() {
+-        return 0;
+-    }
+-
+-    @Override
+-    public void writeToParcel(Parcel dest, int flags) {
+-        dest.writeInt(mEffectType);
+-        dest.writeBoolean(mEffectLoop);
+-    }
+-
+-    private WaveformEffect(Parcel in) {
+-        mEffectType = in.readInt();
+-        mEffectLoop = in.readBoolean();
+-    }
+-
+-    @Override
+-    public String toString() {
+-        return String.valueOf(mEffectType);
+-    }
+-}
+diff --git a/services/core/Android.bp b/services/core/Android.bp
+index 3cb1b961d..2835d4b30 100644
+--- a/services/core/Android.bp
++++ b/services/core/Android.bp
+@@ -170,6 +170,7 @@ java_library_static {
+         "device_policy_aconfig_flags_lib",
+         "error_prone_annotations",
+         "framework-tethering.stubs.module_lib",
++        "oplus-fwk-vibrator-lib",
+         "keepanno-annotations",
+         "monet",
+         "power_hint_flags_lib",
+-- 
+2.47.3
+
