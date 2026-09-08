@@ -1,0 +1,72 @@
+From fe2fc9d356fb3f2d1bbf840a2c07339bf325a745 Mon Sep 17 00:00:00 2001
+From: RobertGarciaa <chae0218@naver.com>
+Date: Fri, 11 Sep 2026 15:08:59 +0900
+Subject: [PATCH] display: preserve OPlus UDFPS press semantic across
+ composition
+
+Preserve the current-frame fingerprint press semantic when composition
+omits the touched UDFPS layer from the final hardware layer list.
+
+In BuildLayerStack, promote fod_pressed_present for the existing touched
+layer name match with a nonzero input buffer. In SetupAtomic, OR the
+common press flag with the legacy final-layer mask calculation.
+
+Keep alpha and visibility out of the press predicate, and preserve mask
+caching, validation and atomic commit behavior.
+
+Change-Id: Id4339f129afb076f57eef322720e07df025d277f
+---
+ sdm/libs/dal/hw_device_drm.cpp |  6 ++++++
+ sdmclient/sdm_display.cpp      | 12 ++++++++++++
+ 2 files changed, 18 insertions(+)
+
+diff --git a/sdm/libs/dal/hw_device_drm.cpp b/sdm/libs/dal/hw_device_drm.cpp
+index 6353788..15ee990 100644
+--- a/sdm/libs/dal/hw_device_drm.cpp
++++ b/sdm/libs/dal/hw_device_drm.cpp
+@@ -1681,6 +1681,12 @@ void HWDeviceDRM::SetupAtomic(Fence::ScopedRef &scoped_ref, HWLayersInfo *hw_lay
+       }
+     }
+ 
++    const bool common_pressed = hw_layers_info->common_info != nullptr &&
++                                hw_layers_info->common_info->flags.fod_pressed_present;
++    if (common_pressed) {
++      mask_state |= OPLUS_OFP_PROPERTY_FINGERPRESS_LAYER;
++    }
++
+     if (current_mask_state_ != mask_state) {
+       current_mask_state_ = mask_state;
+       drm_atomic_intf_->Perform(DRMOps::CONNECTOR_SET_FINGERPRINT_MASK, token_.conn_id, mask_state);
+diff --git a/sdmclient/sdm_display.cpp b/sdmclient/sdm_display.cpp
+index bd34194..0a6f68c 100644
+--- a/sdmclient/sdm_display.cpp
++++ b/sdmclient/sdm_display.cpp
+@@ -800,6 +800,11 @@ static bool IsHDRLayerPresent(Layer *layer) {
+ 
+ void SDMDisplay::BuildLayerStack() {
+   layer_stack_ = LayerStack();
++#ifdef OPLUS_FINGERPRINT_MASK
++  // Current-frame input semantic, independent of the selected composition.
++  const char kOplusTouchedLayerName[] = "SurfaceView[UdfpsControllerOverlay]";
++  layer_stack_.flags.fod_pressed_present = false;
++#endif
+   display_rect_ = LayerRect();
+   layer_stack_.flags.use_metadata_refresh_rate = false;
+   layer_stack_.flags.animating = animating_;
+@@ -1018,6 +1023,13 @@ void SDMDisplay::BuildLayerStack() {
+ 
+     layer->layer_id = sdm_layer->GetId();
+     layer->layer_name = sdm_layer->GetName();
++#ifdef OPLUS_FINGERPRINT_MASK
++    const bool name_match =
++        layer->layer_name.find(kOplusTouchedLayerName) != std::string::npos;
++    if (name_match && layer->input_buffer.buffer_id != 0) {
++      layer_stack_.flags.fod_pressed_present = true;
++    }
++#endif
+     layer->geometry_changes = sdm_layer->GetGeometryChanges();
+     layer_stack_.layers.push_back(layer);
+   }
+-- 
+2.55.0
+
