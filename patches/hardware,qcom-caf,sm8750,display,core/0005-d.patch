@@ -1,0 +1,831 @@
+From 65970cd5f13bc52ab50188dfaff8a4eeaa09cf13 Mon Sep 17 00:00:00 2001
+From: RobertGarciaa <chae0218@naver.com>
+Date: Tue, 8 Sep 2026 09:56:17 +0900
+Subject: [PATCH] d
+
+Change-Id: Ia4542f2980cdd6698981bbdd5a1868a52f616117
+---
+ sde-drm/drm_atomic_req.cpp     |  68 +++++++++++++++
+ sde-drm/drm_connector.cpp      |  57 +++++++++++++
+ sdm/libs/core/strategy.cpp     |  72 ++++++++++++++++
+ sdm/libs/dal/hw_device_drm.cpp | 150 +++++++++++++++++++++++++++++++++
+ sdmclient/sdm_display.cpp      |  86 +++++++++++++++++++
+ sdmclient/sdm_layers.cpp       |  50 +++++++++++
+ 6 files changed, 483 insertions(+)
+
+diff --git a/sde-drm/drm_atomic_req.cpp b/sde-drm/drm_atomic_req.cpp
+index 32ac431..02dcf21 100644
+--- a/sde-drm/drm_atomic_req.cpp
++++ b/sde-drm/drm_atomic_req.cpp
+@@ -70,6 +70,48 @@
+  * SPDX-License-Identifier: BSD-3-Clause-Clear
+  */
+ 
++
++// Temporary diagnostic only. Remove before release.
++// No cached gate or shared diagnostic state: enable explicitly for the repro window.
++#include <errno.h>
++#include <stdarg.h>
++#include <stdio.h>
++#include <stdint.h>
++#include <sys/system_properties.h>
++#include <time.h>
++#include <unistd.h>
++#include <log/log.h>
++
++namespace {
++static bool UdfpsV5Enabled() {
++  const int saved_errno = errno;
++  char value[PROP_VALUE_MAX] = {};
++  __system_property_get("debug.sf.udfps_diag", value);
++  const bool enabled = value[0] == '1' && value[1] == '\0';
++  errno = saved_errno;
++  return enabled;
++}
++
++static void UdfpsV5Log(const char *format, ...) __attribute__((format(printf, 1, 2)));
++static void UdfpsV5Log(const char *format, ...) {
++  const int saved_errno = errno;
++  if (UdfpsV5Enabled()) {
++    struct timespec now = {};
++    clock_gettime(CLOCK_MONOTONIC, &now);
++    char message[3072];
++    va_list args;
++    va_start(args, format);
++    vsnprintf(message, sizeof(message), format, args);
++    va_end(args);
++    __android_log_print(ANDROID_LOG_INFO, "UDFPS_DIAG",
++                        "UDFPS_DIAG version=5 ts=%lld pid=%d cycle=unknown %s",
++                        static_cast<long long>(now.tv_sec) * 1000000000LL + now.tv_nsec,
++                        static_cast<int>(getpid()), message);
++  }
++  errno = saved_errno;
++}
++}  // namespace
++
+ #include <drm_logger.h>
+ 
+ #include "drm_atomic_req.h"
+@@ -87,6 +129,9 @@ DRMAtomicReq::DRMAtomicReq(int fd, DRMManager *drm_mgr) : drm_mgr_(drm_mgr), fd_
+ 
+ DRMAtomicReq::~DRMAtomicReq() {
+   if (drm_atomic_req_) {
++
++    UdfpsV5Log("stage=request_free req=%p conn_id=%u",
++               static_cast<void *>(drm_atomic_req_), token_.conn_id);
+     drmModeAtomicFree(drm_atomic_req_);
+     drm_atomic_req_ = nullptr;
+   }
+@@ -95,6 +140,9 @@ DRMAtomicReq::~DRMAtomicReq() {
+ int DRMAtomicReq::Init(const DRMDisplayToken &tok) {
+   token_ = tok;
+   drm_atomic_req_ = drmModeAtomicAlloc();
++
++  UdfpsV5Log("stage=request_alloc req=%p conn_id=%u cursor=0",
++             static_cast<void *>(drm_atomic_req_), token_.conn_id);
+   if (!drm_atomic_req_) {
+     return -ENOMEM;
+   }
+@@ -244,8 +292,16 @@ int DRMAtomicReq::Validate() {
+   // because we just want to validate, not actually mark planes as removed
+   drm_mgr_->GetPlaneMgr()->UnsetUnusedResources(token_.crtc_id, false/*is_commit*/,
+                                                 drm_atomic_req_);
++  UdfpsV5Log("stage=submit_begin phase=validate req=%p conn_id=%u flags=0x%x cursor=%d "
++             "fp_included=offline fp_value=offline",
++             static_cast<void *>(drm_atomic_req_), token_.conn_id,
++             static_cast<unsigned>(DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_ATOMIC_TEST_ONLY), drmModeAtomicGetCursor(drm_atomic_req_));
+   int ret = drmModeAtomicCommit(fd_, drm_atomic_req_,
+                                 DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_ATOMIC_TEST_ONLY, nullptr);
++  const int diag_ioctl_errno = errno;
++  UdfpsV5Log("stage=submit_end phase=validate req=%p conn_id=%u ioctl_rc=%d errno_raw=%d",
++             static_cast<void *>(drm_atomic_req_), token_.conn_id, ret, diag_ioctl_errno);
++  errno = diag_ioctl_errno;
+   if (ret) {
+     DRM_LOGE("drmModeAtomicCommit failed with error %d (%s).", errno, strerror(errno));
+   }
+@@ -253,6 +309,8 @@ int DRMAtomicReq::Validate() {
+   drm_mgr_->GetPlaneMgr()->PostValidate(token_.crtc_id, !ret);
+   drm_mgr_->GetCrtcMgr()->PostValidate(token_.crtc_id, !ret);
+   drmModeAtomicSetCursor(drm_atomic_req_, 0);
++  UdfpsV5Log("stage=request_reset phase=validate req=%p conn_id=%u cursor=0 cursor_reset=1",
++             static_cast<void *>(drm_atomic_req_), token_.conn_id);
+ 
+   return ret;
+ }
+@@ -273,7 +331,15 @@ int DRMAtomicReq::Commit(bool synchronous, bool retain_planes) {
+     flags |= DRM_MODE_ATOMIC_NONBLOCK;
+   }
+ 
++  UdfpsV5Log("stage=submit_begin phase=commit req=%p conn_id=%u flags=0x%x cursor=%d "
++             "fp_included=offline fp_value=offline",
++             static_cast<void *>(drm_atomic_req_), token_.conn_id,
++             static_cast<unsigned>(flags), drmModeAtomicGetCursor(drm_atomic_req_));
+   int ret = drmModeAtomicCommit(fd_, drm_atomic_req_, flags, nullptr);
++  const int diag_ioctl_errno = errno;
++  UdfpsV5Log("stage=submit_end phase=commit req=%p conn_id=%u ioctl_rc=%d errno_raw=%d",
++             static_cast<void *>(drm_atomic_req_), token_.conn_id, ret, diag_ioctl_errno);
++  errno = diag_ioctl_errno;
+   if (ret) {
+     DRM_LOGE("drmModeAtomicCommit failed with error %d (%s). crtc=%u", errno, strerror(errno), token_.crtc_id);
+   }
+@@ -281,6 +347,8 @@ int DRMAtomicReq::Commit(bool synchronous, bool retain_planes) {
+   drm_mgr_->GetPlaneMgr()->PostCommit(token_.crtc_id, !ret);
+   drm_mgr_->GetCrtcMgr()->PostCommit(token_.crtc_id, !ret);
+   drmModeAtomicSetCursor(drm_atomic_req_, 0);
++  UdfpsV5Log("stage=request_reset phase=commit req=%p conn_id=%u cursor=0 cursor_reset=1",
++             static_cast<void *>(drm_atomic_req_), token_.conn_id);
+ 
+   return ret;
+ }
+diff --git a/sde-drm/drm_connector.cpp b/sde-drm/drm_connector.cpp
+index 422d4e1..4b458f9 100644
+--- a/sde-drm/drm_connector.cpp
++++ b/sde-drm/drm_connector.cpp
+@@ -63,6 +63,48 @@
+  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  */
+ 
++
++// Temporary diagnostic only. Remove before release.
++// No cached gate or shared diagnostic state: enable explicitly for the repro window.
++#include <errno.h>
++#include <stdarg.h>
++#include <stdio.h>
++#include <stdint.h>
++#include <sys/system_properties.h>
++#include <time.h>
++#include <unistd.h>
++#include <log/log.h>
++
++namespace {
++static bool UdfpsV5Enabled() {
++  const int saved_errno = errno;
++  char value[PROP_VALUE_MAX] = {};
++  __system_property_get("debug.sf.udfps_diag", value);
++  const bool enabled = value[0] == '1' && value[1] == '\0';
++  errno = saved_errno;
++  return enabled;
++}
++
++static void UdfpsV5Log(const char *format, ...) __attribute__((format(printf, 1, 2)));
++static void UdfpsV5Log(const char *format, ...) {
++  const int saved_errno = errno;
++  if (UdfpsV5Enabled()) {
++    struct timespec now = {};
++    clock_gettime(CLOCK_MONOTONIC, &now);
++    char message[3072];
++    va_list args;
++    va_start(args, format);
++    vsnprintf(message, sizeof(message), format, args);
++    va_end(args);
++    __android_log_print(ANDROID_LOG_INFO, "UDFPS_DIAG",
++                        "UDFPS_DIAG version=5 ts=%lld pid=%d cycle=unknown %s",
++                        static_cast<long long>(now.tv_sec) * 1000000000LL + now.tv_nsec,
++                        static_cast<int>(getpid()), message);
++  }
++  errno = saved_errno;
++}
++}  // namespace
++
+ #include <stdint.h>
+ #include <stdlib.h>
+ #include <drm.h>
+@@ -1390,6 +1432,14 @@ void DRMConnector::Perform(DRMOps code, drmModeAtomicReq *req, va_list args) {
+ #ifdef CONNECTOR_PROP_UDFPS
+     case DRMOps::CONNECTOR_SET_FINGERPRINT_MASK: {
+       if (!prop_mgr_.IsPropertyAvailable(DRMProperty::FINGERPRINT_MASK)) {
++
++        // Observe a copy; do not consume or change the original varargs list.
++        va_list diag_args;
++        va_copy(diag_args, args);
++        const uint32_t diag_value = va_arg(diag_args, uint32_t);
++        va_end(diag_args);
++        UdfpsV5Log("stage=add_property req=%p obj_id=%u available=0 prop_id=unknown "
++                   "value=0x%x add_rc=not_called", static_cast<void *>(req), obj_id, diag_value);
+         DRM_LOGE("DRMConnector::%s: Connector %d: Fingerprint property is not available",
+                  __FUNCTION__, obj_id);
+         return;
+@@ -1397,6 +1447,13 @@ void DRMConnector::Perform(DRMOps code, drmModeAtomicReq *req, va_list args) {
+       uint32_t fingerprint_mask = va_arg(args, uint32_t);
+       uint32_t prop_id = prop_mgr_.GetPropertyId(DRMProperty::FINGERPRINT_MASK);
+       int ret = drmModeAtomicAddProperty(req, obj_id, prop_id, fingerprint_mask);
++
++      const int diag_add_errno = errno;
++      UdfpsV5Log("stage=add_property req=%p obj_id=%u prop_id=%u value=0x%x available=1 "
++                 "add_rc=%d add_ok=%d errno_raw=%d cursor=%d",
++                 static_cast<void *>(req), obj_id, prop_id, fingerprint_mask, ret, ret >= 0,
++                 diag_add_errno, drmModeAtomicGetCursor(req));
++      errno = diag_add_errno;
+       if (ret < 0) {
+         DRM_LOGE("AtomicAddProperty failed obj_id 0x%x, prop_id %d mode %d ret %d",
+                  obj_id, prop_id, fingerprint_mask, ret);
+diff --git a/sdm/libs/core/strategy.cpp b/sdm/libs/core/strategy.cpp
+index 083725d..bc5cd9e 100644
+--- a/sdm/libs/core/strategy.cpp
++++ b/sdm/libs/core/strategy.cpp
+@@ -29,6 +29,48 @@
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+ */
+ 
++
++// Temporary diagnostic only. Remove before release.
++// No cached gate or shared diagnostic state: enable explicitly for the repro window.
++#include <errno.h>
++#include <stdarg.h>
++#include <stdio.h>
++#include <stdint.h>
++#include <sys/system_properties.h>
++#include <time.h>
++#include <unistd.h>
++#include <log/log.h>
++
++namespace {
++static bool UdfpsV5Enabled() {
++  const int saved_errno = errno;
++  char value[PROP_VALUE_MAX] = {};
++  __system_property_get("debug.sf.udfps_diag", value);
++  const bool enabled = value[0] == '1' && value[1] == '\0';
++  errno = saved_errno;
++  return enabled;
++}
++
++static void UdfpsV5Log(const char *format, ...) __attribute__((format(printf, 1, 2)));
++static void UdfpsV5Log(const char *format, ...) {
++  const int saved_errno = errno;
++  if (UdfpsV5Enabled()) {
++    struct timespec now = {};
++    clock_gettime(CLOCK_MONOTONIC, &now);
++    char message[3072];
++    va_list args;
++    va_start(args, format);
++    vsnprintf(message, sizeof(message), format, args);
++    va_end(args);
++    __android_log_print(ANDROID_LOG_INFO, "UDFPS_DIAG",
++                        "UDFPS_DIAG version=5 ts=%lld pid=%d cycle=unknown %s",
++                        static_cast<long long>(now.tv_sec) * 1000000000LL + now.tv_nsec,
++                        static_cast<int>(getpid()), message);
++  }
++  errno = saved_errno;
++}
++}  // namespace
++
+ #include <utils/constants.h>
+ #include <utils/debug.h>
+ #include <vector>
+@@ -146,6 +188,22 @@ DisplayError Strategy::GetNextStrategy() {
+   // Mark all application layers for GPU composition. Find GPU target buffer and store its index for
+   // programming the hardware.
+   LayerStack *layer_stack = disp_layer_stack_->stack;
++
++  if (UdfpsV5Enabled()) {
++    int input_udfps_index = -1;
++    for (size_t i = 0; i < layer_stack->layers.size(); ++i) {
++      if (layer_stack->layers[i]->layer_name.find("SurfaceView[UdfpsControllerOverlay]") !=
++          std::string::npos) {
++        input_udfps_index = static_cast<int>(i);
++      }
++    }
++    UdfpsV5Log("stage=strategy_enter display=%llu gpu_fallback=1 extn_start_success=%d "
++               "disable_gpu_comp=%d input_layer_count=%zu app_layer_count=%u "
++               "input_udfps=%d input_udfps_index=%d",
++               static_cast<unsigned long long>(display_id_), extn_start_success_, disable_gpu_comp_,
++               layer_stack->layers.size(), disp_layer_stack_->stack_info.app_layer_count,
++               input_udfps_index >= 0, input_udfps_index);
++  }
+   for (uint32_t i = 0; i < disp_layer_stack_->stack_info.app_layer_count; i++) {
+     layer_stack->layers.at(i)->composition = kCompositionGPU;
+     layer_stack->layers.at(i)->request.flags.request_flags = 0;  // Reset layer request
+@@ -196,6 +254,20 @@ DisplayError Strategy::GetNextStrategy() {
+     CalculateSrcRect(layer, split_ratio, final_transform, &src_rect, &layer.src_rect);
+     info.second.hw_layers.push_back(layer);
+ 
++    if (UdfpsV5Enabled()) {
++      int hw_udfps_index = -1;
++      for (size_t i = 0; i < info.second.hw_layers.size(); ++i) {
++        if (info.second.hw_layers[i].layer_name.find("SurfaceView[UdfpsControllerOverlay]") !=
++            std::string::npos) {
++          hw_udfps_index = static_cast<int>(i);
++        }
++      }
++      UdfpsV5Log("stage=strategy_result display=%llu gpu_fallback=1 core=%u "
++                 "hw_layer_count=%zu gpu_target=1 hw_udfps=%d hw_udfps_index=%d",
++                 static_cast<unsigned long long>(display_id_), static_cast<unsigned>(info.first),
++                 info.second.hw_layers.size(), hw_udfps_index >= 0, hw_udfps_index);
++    }
++
+     info.second.index.push_back(disp_layer_stack_->stack_info.gpu_target_index);
+     info.second.roi_index.push_back(0);
+     info.second.common_info = &disp_layer_stack_->stack_info.common_info;
+diff --git a/sdm/libs/dal/hw_device_drm.cpp b/sdm/libs/dal/hw_device_drm.cpp
+index 6353788..0e6cab7 100644
+--- a/sdm/libs/dal/hw_device_drm.cpp
++++ b/sdm/libs/dal/hw_device_drm.cpp
+@@ -36,6 +36,48 @@
+ 
+ #define __STDC_FORMAT_MACROS
+ 
++
++// Temporary diagnostic only. Remove before release.
++// No cached gate or shared diagnostic state: enable explicitly for the repro window.
++#include <errno.h>
++#include <stdarg.h>
++#include <stdio.h>
++#include <stdint.h>
++#include <sys/system_properties.h>
++#include <time.h>
++#include <unistd.h>
++#include <log/log.h>
++
++namespace {
++static bool UdfpsV5Enabled() {
++  const int saved_errno = errno;
++  char value[PROP_VALUE_MAX] = {};
++  __system_property_get("debug.sf.udfps_diag", value);
++  const bool enabled = value[0] == '1' && value[1] == '\0';
++  errno = saved_errno;
++  return enabled;
++}
++
++static void UdfpsV5Log(const char *format, ...) __attribute__((format(printf, 1, 2)));
++static void UdfpsV5Log(const char *format, ...) {
++  const int saved_errno = errno;
++  if (UdfpsV5Enabled()) {
++    struct timespec now = {};
++    clock_gettime(CLOCK_MONOTONIC, &now);
++    char message[3072];
++    va_list args;
++    va_start(args, format);
++    vsnprintf(message, sizeof(message), format, args);
++    va_end(args);
++    __android_log_print(ANDROID_LOG_INFO, "UDFPS_DIAG",
++                        "UDFPS_DIAG version=5 ts=%lld pid=%d cycle=unknown %s",
++                        static_cast<long long>(now.tv_sec) * 1000000000LL + now.tv_nsec,
++                        static_cast<int>(getpid()), message);
++  }
++  errno = saved_errno;
++}
++}  // namespace
++
+ #include <ctype.h>
+ #include <time.h>
+ #include <drm/drm_fourcc.h>
+@@ -1378,12 +1420,21 @@ DisplayError HWDeviceDRM::GetConfigIndex(char *mode, uint32_t *index) {
+ }
+ 
+ DisplayError HWDeviceDRM::PowerOn(const HWQosData &qos_data, SyncPoints *sync_points) {
++#ifdef CONNECTOR_PROP_UDFPS
++  UdfpsV5Log("stage=power_cache function=PowerOn event=%s conn_id=%u cache=0x%x",
++             "enter", token_.conn_id, current_mask_state_);
++#endif
++
+   SetQOSData(qos_data);
+ 
+   if (tui_state_ != kTUIStateNone || pending_cwb_teardown_) {
+     DLOGI("Request deferred TUI state %d pending cwb teardown %d", tui_state_,
+           pending_cwb_teardown_);
+     pending_power_state_ = kPowerStateOn;
++#ifdef CONNECTOR_PROP_UDFPS
++    UdfpsV5Log("stage=power_cache function=PowerOn event=%s conn_id=%u cache=0x%x",
++               "exit", token_.conn_id, current_mask_state_);
++#endif
+     return kErrorDeferred;
+   }
+ 
+@@ -1415,6 +1466,10 @@ DisplayError HWDeviceDRM::PowerOn(const HWQosData &qos_data, SyncPoints *sync_po
+   int ret = NullCommit(is_synchronous, true /* retain_planes */);
+   if (ret) {
+     DLOGE("Failed with error: %d", ret);
++#ifdef CONNECTOR_PROP_UDFPS
++    UdfpsV5Log("stage=power_cache function=PowerOn event=%s conn_id=%u cache=0x%x",
++               "exit", token_.conn_id, current_mask_state_);
++#endif
+     return kErrorHardware;
+   }
+ 
+@@ -1425,17 +1480,34 @@ DisplayError HWDeviceDRM::PowerOn(const HWQosData &qos_data, SyncPoints *sync_po
+ 
+   last_power_mode_ = DRMPowerMode::ON;
+ 
++#ifdef CONNECTOR_PROP_UDFPS
++  UdfpsV5Log("stage=power_cache function=PowerOn event=%s conn_id=%u cache=0x%x",
++             "exit", token_.conn_id, current_mask_state_);
++#endif
+   return kErrorNone;
+ }
+ 
+ DisplayError HWDeviceDRM::PowerOff(bool teardown, SyncPoints *sync_points) {
++#ifdef CONNECTOR_PROP_UDFPS
++  UdfpsV5Log("stage=power_cache function=PowerOff event=%s conn_id=%u cache=0x%x",
++             "enter", token_.conn_id, current_mask_state_);
++#endif
++
+   DTRACE_SCOPED();
+   if (!drm_atomic_intf_) {
+     DLOGE("DRM Atomic Interface is null!");
++#ifdef CONNECTOR_PROP_UDFPS
++    UdfpsV5Log("stage=power_cache function=PowerOff event=%s conn_id=%u cache=0x%x",
++               "exit", token_.conn_id, current_mask_state_);
++#endif
+     return kErrorUndefined;
+   }
+ 
+   if (first_cycle_) {
++#ifdef CONNECTOR_PROP_UDFPS
++    UdfpsV5Log("stage=power_cache function=PowerOff event=%s conn_id=%u cache=0x%x",
++               "exit", token_.conn_id, current_mask_state_);
++#endif
+     return kErrorNone;
+   }
+ 
+@@ -1443,6 +1515,10 @@ DisplayError HWDeviceDRM::PowerOff(bool teardown, SyncPoints *sync_points) {
+     DLOGI("Request deferred TUI state %d pending cwb teardown %d", tui_state_,
+           pending_cwb_teardown_);
+     pending_power_state_ = kPowerStateOff;
++#ifdef CONNECTOR_PROP_UDFPS
++    UdfpsV5Log("stage=power_cache function=PowerOff event=%s conn_id=%u cache=0x%x",
++               "exit", token_.conn_id, current_mask_state_);
++#endif
+     return kErrorDeferred;
+   }
+ #ifdef SEC_FINGERPRINT_MASK
+@@ -1494,6 +1570,10 @@ DisplayError HWDeviceDRM::PowerOff(bool teardown, SyncPoints *sync_points) {
+         ret, hw_panel_info_.dynamic_fps, seamless_mode_switch_, vrefresh_, panel_mode_changed_,
+         bit_clk_rate_, bpp_mode_changed_);
+     bpp_mode_changed_ = 0;
++#ifdef CONNECTOR_PROP_UDFPS
++    UdfpsV5Log("stage=power_cache function=PowerOff event=%s conn_id=%u cache=0x%x",
++               "exit", token_.conn_id, current_mask_state_);
++#endif
+     return kErrorHardware;
+   }
+ 
+@@ -1517,14 +1597,27 @@ DisplayError HWDeviceDRM::PowerOff(bool teardown, SyncPoints *sync_points) {
+ 
+   last_power_mode_ = DRMPowerMode::OFF;
+ 
++#ifdef CONNECTOR_PROP_UDFPS
++  UdfpsV5Log("stage=power_cache function=PowerOff event=%s conn_id=%u cache=0x%x",
++             "exit", token_.conn_id, current_mask_state_);
++#endif
+   return kErrorNone;
+ }
+ 
+ DisplayError HWDeviceDRM::Doze(const HWQosData &qos_data, SyncPoints *sync_points) {
++#ifdef CONNECTOR_PROP_UDFPS
++  UdfpsV5Log("stage=power_cache function=Doze event=%s conn_id=%u cache=0x%x",
++             "enter", token_.conn_id, current_mask_state_);
++#endif
++
+   DTRACE_SCOPED();
+ 
+   if (first_cycle_ || tui_state_ != kTUIStateNone || last_power_mode_ != DRMPowerMode::OFF) {
+     pending_power_state_ = kPowerStateDoze;
++#ifdef CONNECTOR_PROP_UDFPS
++    UdfpsV5Log("stage=power_cache function=Doze event=%s conn_id=%u cache=0x%x",
++               "exit", token_.conn_id, current_mask_state_);
++#endif
+     return kErrorDeferred;
+   }
+ 
+@@ -1555,6 +1648,10 @@ DisplayError HWDeviceDRM::Doze(const HWQosData &qos_data, SyncPoints *sync_point
+   int ret = NullCommit(is_synchronous, true /* retain_planes */);
+   if (ret) {
+     DLOGE("Failed with error: %d", ret);
++#ifdef CONNECTOR_PROP_UDFPS
++    UdfpsV5Log("stage=power_cache function=Doze event=%s conn_id=%u cache=0x%x",
++               "exit", token_.conn_id, current_mask_state_);
++#endif
+     return kErrorHardware;
+   }
+ 
+@@ -1565,14 +1662,27 @@ DisplayError HWDeviceDRM::Doze(const HWQosData &qos_data, SyncPoints *sync_point
+   pending_power_state_ = kPowerStateNone;
+   last_power_mode_ = DRMPowerMode::DOZE;
+ 
++#ifdef CONNECTOR_PROP_UDFPS
++  UdfpsV5Log("stage=power_cache function=Doze event=%s conn_id=%u cache=0x%x",
++             "exit", token_.conn_id, current_mask_state_);
++#endif
+   return kErrorNone;
+ }
+ 
+ DisplayError HWDeviceDRM::DozeSuspend(const HWQosData &qos_data, SyncPoints *sync_points) {
++#ifdef CONNECTOR_PROP_UDFPS
++  UdfpsV5Log("stage=power_cache function=DozeSuspend event=%s conn_id=%u cache=0x%x",
++             "enter", token_.conn_id, current_mask_state_);
++#endif
++
+   DTRACE_SCOPED();
+ 
+   if (tui_state_ != kTUIStateNone && tui_state_ != kTUIStateEnd) {
+     pending_power_state_ = kPowerStateDozeSuspend;
++#ifdef CONNECTOR_PROP_UDFPS
++    UdfpsV5Log("stage=power_cache function=DozeSuspend event=%s conn_id=%u cache=0x%x",
++               "exit", token_.conn_id, current_mask_state_);
++#endif
+     return kErrorDeferred;
+   }
+ 
+@@ -1605,6 +1715,10 @@ DisplayError HWDeviceDRM::DozeSuspend(const HWQosData &qos_data, SyncPoints *syn
+   int ret = NullCommit(is_synchronous, true /* retain_planes */);
+   if (ret) {
+     DLOGE("Failed with error: %d", ret);
++#ifdef CONNECTOR_PROP_UDFPS
++    UdfpsV5Log("stage=power_cache function=DozeSuspend event=%s conn_id=%u cache=0x%x",
++               "exit", token_.conn_id, current_mask_state_);
++#endif
+     return kErrorHardware;
+   }
+ 
+@@ -1616,6 +1730,10 @@ DisplayError HWDeviceDRM::DozeSuspend(const HWQosData &qos_data, SyncPoints *syn
+ 
+   last_power_mode_ = DRMPowerMode::DOZE_SUSPEND;
+ 
++#ifdef CONNECTOR_PROP_UDFPS
++  UdfpsV5Log("stage=power_cache function=DozeSuspend event=%s conn_id=%u cache=0x%x",
++             "exit", token_.conn_id, current_mask_state_);
++#endif
+   return kErrorNone;
+ }
+ 
+@@ -1671,19 +1789,51 @@ void HWDeviceDRM::SetupAtomic(Fence::ScopedRef &scoped_ref, HWLayersInfo *hw_lay
+ #ifdef OPLUS_FINGERPRINT_MASK
+   if (hw_panel_info_.is_primary_panel) {
+     uint32_t mask_state = 0;
++    const uint32_t diag_cache_before = current_mask_state_;
++    bool diag_perform_called = false;
++    int diag_touched_index = -1;
++    int diag_dim_index = -1;
+ 
+     for (uint32_t i = 0; i < hw_layer_count; i++) {
+       const std::string &name = hw_layers_info->hw_layers[i].layer_name;
+       if (name.find(UDFPS_DIM_LAYER_NAME) != std::string::npos) {
+         mask_state |= OPLUS_OFP_PROPERTY_DIM_LAYER;
++        diag_dim_index = static_cast<int>(i);
+       } else if (name.find(UDFPS_TOUCHED_LAYER_NAME) != std::string::npos) {
+         mask_state |= OPLUS_OFP_PROPERTY_FINGERPRESS_LAYER;
++        diag_touched_index = static_cast<int>(i);
+       }
+     }
+ 
+     if (current_mask_state_ != mask_state) {
++      diag_perform_called = true;
+       current_mask_state_ = mask_state;
+       drm_atomic_intf_->Perform(DRMOps::CONNECTOR_SET_FINGERPRINT_MASK, token_.conn_id, mask_state);
++      UdfpsV5Log("stage=mask_after_perform phase=%s conn_id=%u cache_after=0x%x",
++                 validate ? "validate" : "commit", token_.conn_id, current_mask_state_);
++    }
++
++    UdfpsV5Log("stage=mask phase=%s conn_id=%u display=%llu hw_layer_count=%u "
++               "found_touched=%d touched_index=%d found_dim=%d dim_index=%d "
++               "mask_calc=0x%x cache_before=0x%x cache_after=0x%x perform_called=%d skip=%s",
++               validate ? "validate" : "commit", token_.conn_id,
++               static_cast<unsigned long long>(display_id_), hw_layer_count,
++               diag_touched_index >= 0, diag_touched_index, diag_dim_index >= 0, diag_dim_index,
++               mask_state, diag_cache_before, current_mask_state_, diag_perform_called,
++               diag_perform_called ? "none" : "cache_same");
++    if (UdfpsV5Enabled()) {
++      const uint32_t shown = hw_layer_count < 8 ? hw_layer_count : 8;
++      for (uint32_t i = 0; i < shown; ++i) {
++        const auto &diag_layer = hw_layers_info->hw_layers[i];
++        UdfpsV5Log("stage=hw_layer phase=%s conn_id=%u index=%u layer_id=%llu buffer_id=%llu "
++                   "name=\"%s\" name_bytes=%zu",
++                   validate ? "validate" : "commit", token_.conn_id, i,
++                   static_cast<unsigned long long>(diag_layer.layer_id),
++                   static_cast<unsigned long long>(diag_layer.input_buffer.buffer_id),
++                   diag_layer.layer_name.c_str(), diag_layer.layer_name.size());
++      }
++      UdfpsV5Log("stage=hw_summary phase=%s conn_id=%u shown=%u omitted=%u",
++                 validate ? "validate" : "commit", token_.conn_id, shown, hw_layer_count - shown);
+     }
+   }
+ #endif
+diff --git a/sdmclient/sdm_display.cpp b/sdmclient/sdm_display.cpp
+index bd34194..baabf64 100644
+--- a/sdmclient/sdm_display.cpp
++++ b/sdmclient/sdm_display.cpp
+@@ -33,6 +33,48 @@
+  * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+  * SPDX-License-Identifier: BSD-3-Clause-Clear
+  */
++
++// Temporary diagnostic only. Remove before release.
++// No cached gate or shared diagnostic state: enable explicitly for the repro window.
++#include <errno.h>
++#include <stdarg.h>
++#include <stdio.h>
++#include <stdint.h>
++#include <sys/system_properties.h>
++#include <time.h>
++#include <unistd.h>
++#include <log/log.h>
++
++namespace {
++static bool UdfpsV5Enabled() {
++  const int saved_errno = errno;
++  char value[PROP_VALUE_MAX] = {};
++  __system_property_get("debug.sf.udfps_diag", value);
++  const bool enabled = value[0] == '1' && value[1] == '\0';
++  errno = saved_errno;
++  return enabled;
++}
++
++static void UdfpsV5Log(const char *format, ...) __attribute__((format(printf, 1, 2)));
++static void UdfpsV5Log(const char *format, ...) {
++  const int saved_errno = errno;
++  if (UdfpsV5Enabled()) {
++    struct timespec now = {};
++    clock_gettime(CLOCK_MONOTONIC, &now);
++    char message[3072];
++    va_list args;
++    va_start(args, format);
++    vsnprintf(message, sizeof(message), format, args);
++    va_end(args);
++    __android_log_print(ANDROID_LOG_INFO, "UDFPS_DIAG",
++                        "UDFPS_DIAG version=5 ts=%lld pid=%d cycle=unknown %s",
++                        static_cast<long long>(now.tv_sec) * 1000000000LL + now.tv_nsec,
++                        static_cast<int>(getpid()), message);
++  }
++  errno = saved_errno;
++}
++}  // namespace
++
+ #include <errno.h>
+ #include <math.h>
+ #include <sys/stat.h>
+@@ -1018,10 +1060,37 @@ void SDMDisplay::BuildLayerStack() {
+ 
+     layer->layer_id = sdm_layer->GetId();
+     layer->layer_name = sdm_layer->GetName();
++
++    UdfpsV5Log("stage=input display=%llu layer_id=%llu buffer_id=%llu handle_id=%llu "
++               "layer_name=\"%s\" name_bytes=%zu buffer_valid=%d requested_composition=%d",
++               static_cast<unsigned long long>(id_),
++               static_cast<unsigned long long>(layer->layer_id),
++               static_cast<unsigned long long>(layer->input_buffer.buffer_id),
++               static_cast<unsigned long long>(layer->input_buffer.handle_id),
++               (layer_stack_.layers.size() < 8 ? layer->layer_name.c_str() : "<omitted>"),
++               layer->layer_name.size(),
++               layer->input_buffer.buffer_id != 0,
++               static_cast<int>(sdm_layer->GetOrigClientRequestedCompositionType()));
+     layer->geometry_changes = sdm_layer->GetGeometryChanges();
+     layer_stack_.layers.push_back(layer);
+   }
+ 
++
++  if (UdfpsV5Enabled()) {
++    int input_udfps_index = -1;
++    for (size_t i = 0; i < layer_stack_.layers.size(); ++i) {
++      if (layer_stack_.layers[i]->layer_name.find("SurfaceView[UdfpsControllerOverlay]") !=
++          std::string::npos) {
++        input_udfps_index = static_cast<int>(i);
++      }
++    }
++    const size_t shown = layer_stack_.layers.size() < 8 ? layer_stack_.layers.size() : 8;
++    UdfpsV5Log("stage=input_summary display=%llu input_layer_count=%zu shown=%zu omitted=%zu "
++               "input_udfps=%d input_udfps_index=%d",
++               static_cast<unsigned long long>(id_), layer_stack_.layers.size(), shown,
++               layer_stack_.layers.size() - shown, input_udfps_index >= 0, input_udfps_index);
++  }
++
+   // TODO(user): Set correctly when SDM supports geometry_changes as bitmask
+   geometry_changes_ |= sdm_layer_stack_->geometry_changes_;
+   layer_stack_.flags.geometry_changed =
+@@ -1120,11 +1189,16 @@ void SDMDisplay::PostPowerMode() {
+ }
+ 
+ DisplayError SDMDisplay::SetPowerMode(SDMPowerMode mode, bool teardown) {
++  UdfpsV5Log("stage=power_mode function=SetPowerMode event=%s display=%llu mode=%d",
++             "enter", static_cast<unsigned long long>(id_), static_cast<int>(mode));
++
+   DLOGI("display = %" PRId64 ", mode = %s", id_, to_string(mode).c_str());
+   DisplayState state = kStateOff;
+   bool flush_on_error = flush_on_error_;
+ 
+   if (shutdown_pending_) {
++    UdfpsV5Log("stage=power_mode function=SetPowerMode event=%s display=%llu mode=%d",
++               "exit", static_cast<unsigned long long>(id_), static_cast<int>(mode));
+     return kErrorNone;
+   }
+ 
+@@ -1139,6 +1213,8 @@ DisplayError SDMDisplay::SetPowerMode(SDMPowerMode mode, bool teardown) {
+     if (mmrm_restricted_ && (display_class_ != DISPLAY_CLASS_BUILTIN) &&
+         (current_power_mode_ == SDMPowerMode::POWER_MODE_OFF ||
+          current_power_mode_ == SDMPowerMode::POWER_MODE_DOZE_SUSPEND)) {
++      UdfpsV5Log("stage=power_mode function=SetPowerMode event=%s display=%llu mode=%d",
++                 "exit", static_cast<unsigned long long>(id_), static_cast<int>(mode));
+       return kErrorNone;
+     }
+     RestoreColorTransform();
+@@ -1148,6 +1224,8 @@ DisplayError SDMDisplay::SetPowerMode(SDMPowerMode mode, bool teardown) {
+     if (mmrm_restricted_ && (display_class_ != DISPLAY_CLASS_BUILTIN) &&
+         (current_power_mode_ == SDMPowerMode::POWER_MODE_OFF ||
+          current_power_mode_ == SDMPowerMode::POWER_MODE_DOZE_SUSPEND)) {
++      UdfpsV5Log("stage=power_mode function=SetPowerMode event=%s display=%llu mode=%d",
++                 "exit", static_cast<unsigned long long>(id_), static_cast<int>(mode));
+       return kErrorNone;
+     }
+     RestoreColorTransform();
+@@ -1157,6 +1235,8 @@ DisplayError SDMDisplay::SetPowerMode(SDMPowerMode mode, bool teardown) {
+     state = kStateDozeSuspend;
+     break;
+   default:
++    UdfpsV5Log("stage=power_mode function=SetPowerMode event=%s display=%llu mode=%d",
++               "exit", static_cast<unsigned long long>(id_), static_cast<int>(mode));
+     return kErrorNotSupported;
+   }
+   shared_ptr<Fence> release_fence = nullptr;
+@@ -1170,9 +1250,13 @@ DisplayError SDMDisplay::SetPowerMode(SDMPowerMode mode, bool teardown) {
+   } else {
+     if (error == kErrorShutDown) {
+       shutdown_pending_ = true;
++      UdfpsV5Log("stage=power_mode function=SetPowerMode event=%s display=%llu mode=%d",
++                 "exit", static_cast<unsigned long long>(id_), static_cast<int>(mode));
+       return kErrorNone;
+     }
+     DLOGE("Set state failed. Error = %d", error);
++    UdfpsV5Log("stage=power_mode function=SetPowerMode event=%s display=%llu mode=%d",
++               "exit", static_cast<unsigned long long>(id_), static_cast<int>(mode));
+     return kErrorNotSupported;
+   }
+ 
+@@ -1182,6 +1266,8 @@ DisplayError SDMDisplay::SetPowerMode(SDMPowerMode mode, bool teardown) {
+ 
+   PostPowerMode();
+ 
++  UdfpsV5Log("stage=power_mode function=SetPowerMode event=%s display=%llu mode=%d",
++             "exit", static_cast<unsigned long long>(id_), static_cast<int>(mode));
+   return kErrorNone;
+ }
+ 
+diff --git a/sdmclient/sdm_layers.cpp b/sdmclient/sdm_layers.cpp
+index fd57fe5..f73517c 100644
+--- a/sdmclient/sdm_layers.cpp
++++ b/sdmclient/sdm_layers.cpp
+@@ -33,6 +33,48 @@
+  * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+  * SPDX-License-Identifier: BSD-3-Clause-Clear
+  */
++
++// Temporary diagnostic only. Remove before release.
++// No cached gate or shared diagnostic state: enable explicitly for the repro window.
++#include <errno.h>
++#include <stdarg.h>
++#include <stdio.h>
++#include <stdint.h>
++#include <sys/system_properties.h>
++#include <time.h>
++#include <unistd.h>
++#include <log/log.h>
++
++namespace {
++static bool UdfpsV5Enabled() {
++  const int saved_errno = errno;
++  char value[PROP_VALUE_MAX] = {};
++  __system_property_get("debug.sf.udfps_diag", value);
++  const bool enabled = value[0] == '1' && value[1] == '\0';
++  errno = saved_errno;
++  return enabled;
++}
++
++static void UdfpsV5Log(const char *format, ...) __attribute__((format(printf, 1, 2)));
++static void UdfpsV5Log(const char *format, ...) {
++  const int saved_errno = errno;
++  if (UdfpsV5Enabled()) {
++    struct timespec now = {};
++    clock_gettime(CLOCK_MONOTONIC, &now);
++    char message[3072];
++    va_list args;
++    va_start(args, format);
++    vsnprintf(message, sizeof(message), format, args);
++    va_end(args);
++    __android_log_print(ANDROID_LOG_INFO, "UDFPS_DIAG",
++                        "UDFPS_DIAG version=5 ts=%lld pid=%d cycle=unknown %s",
++                        static_cast<long long>(now.tv_sec) * 1000000000LL + now.tv_nsec,
++                        static_cast<int>(getpid()), message);
++  }
++  errno = saved_errno;
++}
++}  // namespace
++
+ #include "sdm_layers.h"
+ #include "sdm_debugger.h"
+ #include <UBWCVersion.h>
+@@ -712,6 +754,14 @@ DisplayError SDMLayer::SetMetaData(const SnapHandle *handle, Layer *layer) {
+   snapmapper_->GetMetadata(*handle, MetadataType::NAME, &name);
+   name_ = name;
+ 
++  // buffer_id is the incoming handle, not the previous input_buffer (updated later).
++  UdfpsV5Log("stage=metadata display=%llu layer_id=%llu buffer_id=%llu "
++             "metadata_rc=unknown name=\"%s\" name_bytes=%zu",
++             static_cast<unsigned long long>(display_id_),
++             static_cast<unsigned long long>(id_),
++             static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(handle)),
++             name.c_str(), name.size());
++
+   float fps = 0;
+   uint32_t frame_rate = layer->frame_rate;
+   if (GetMetadata(handle, MetadataType::REFRESH_RATE, &fps, snapmapper_) ==
+-- 
+2.55.0
+
