@@ -1,0 +1,138 @@
+From df19002580b72c965680d89cbd3793def1b97353 Mon Sep 17 00:00:00 2001
+From: RobertGarciaa <chae0218@naver.com>
+Date: Tue, 8 Sep 2026 20:43:57 +0900
+Subject: [PATCH] display: preserve OPlus UDFPS press semantic across
+ composition
+
+Preserve the input fingerprint-press semantic through the existing
+LayerStack/common_info path to SetupAtomic when the UDFPS touched layer
+is absent from final hw_layers after composition.
+
+In the v5 trace, only 4 of 24 UDFPS instances observed at SDM input reached
+final hw_layers, corresponding one-to-one with the four successful
+attempts. The 20 failed attempts had found_touched=0 and mask_calc=0x0,
+so FINGERPRINT_MASK was not added to the atomic request.
+
+The ON predicate has exactly two conditions: the exact touched-name
+literal (using the existing DAL substring-match semantics) and a valid
+input buffer. plane_alpha and visible region are diagnostic only;
+decide whether to promote them into the predicate after on-device OFF
+verification.
+
+The SetupAtomic OR with the legacy match is for root-cause verification,
+not a final production policy. Check for stale legacy positives on device
+before choosing the production policy.
+
+Leave cache semantics, TEST_ONLY, Validate and AtomicCommit unchanged;
+they belong to separate Commit B. Add no struct fields, headers, APIs or
+persistent state.
+
+Build on the existing v5 temporary diagnostic commit and retain its gate
+and logging. Validation already completed using the existing pagani Ninja
+graph: libsdmclient and libsdmdal, 812/812 tasks, exit 0.
+
+Change-Id: I57b0e74f165661cea0acb46e828df2d68c0ea0d5
+---
+ sdm/libs/dal/hw_device_drm.cpp | 14 ++++++++++++--
+ sdmclient/sdm_display.cpp      | 34 ++++++++++++++++++++++++++++++++--
+ 2 files changed, 44 insertions(+), 4 deletions(-)
+
+diff --git a/sdm/libs/dal/hw_device_drm.cpp b/sdm/libs/dal/hw_device_drm.cpp
+index 0e6cab7..7d98e00 100644
+--- a/sdm/libs/dal/hw_device_drm.cpp
++++ b/sdm/libs/dal/hw_device_drm.cpp
+@@ -1805,6 +1805,14 @@ void HWDeviceDRM::SetupAtomic(Fence::ScopedRef &scoped_ref, HWLayersInfo *hw_lay
+       }
+     }
+ 
++    const bool common_pressed = hw_layers_info->common_info != nullptr &&
++                                hw_layers_info->common_info->flags.fod_pressed_present;
++    // Verification policy: preserve the legacy match and add the input semantic.
++    if (common_pressed) {
++      mask_state |= OPLUS_OFP_PROPERTY_FINGERPRESS_LAYER;
++    }
++    const bool final_pressed = (mask_state & OPLUS_OFP_PROPERTY_FINGERPRESS_LAYER) != 0;
++
+     if (current_mask_state_ != mask_state) {
+       diag_perform_called = true;
+       current_mask_state_ = mask_state;
+@@ -1815,12 +1823,14 @@ void HWDeviceDRM::SetupAtomic(Fence::ScopedRef &scoped_ref, HWLayersInfo *hw_lay
+ 
+     UdfpsV5Log("stage=mask phase=%s conn_id=%u display=%llu hw_layer_count=%u "
+                "found_touched=%d touched_index=%d found_dim=%d dim_index=%d "
+-               "mask_calc=0x%x cache_before=0x%x cache_after=0x%x perform_called=%d skip=%s",
++               "mask_calc=0x%x cache_before=0x%x cache_after=0x%x perform_called=%d skip=%s "
++               "common_pressed=%d legacy_found=%d final_pressed=%d",
+                validate ? "validate" : "commit", token_.conn_id,
+                static_cast<unsigned long long>(display_id_), hw_layer_count,
+                diag_touched_index >= 0, diag_touched_index, diag_dim_index >= 0, diag_dim_index,
+                mask_state, diag_cache_before, current_mask_state_, diag_perform_called,
+-               diag_perform_called ? "none" : "cache_same");
++               diag_perform_called ? "none" : "cache_same", common_pressed,
++               diag_touched_index >= 0, final_pressed);
+     if (UdfpsV5Enabled()) {
+       const uint32_t shown = hw_layer_count < 8 ? hw_layer_count : 8;
+       for (uint32_t i = 0; i < shown; ++i) {
+diff --git a/sdmclient/sdm_display.cpp b/sdmclient/sdm_display.cpp
+index baabf64..09d1cfa 100644
+--- a/sdmclient/sdm_display.cpp
++++ b/sdmclient/sdm_display.cpp
+@@ -842,6 +842,11 @@ static bool IsHDRLayerPresent(Layer *layer) {
+ 
+ void SDMDisplay::BuildLayerStack() {
+   layer_stack_ = LayerStack();
++#ifdef OPLUS_FINGERPRINT_MASK
++  // Current-frame input semantic, independent of the selected composition.
++  const char kOplusTouchedLayerName[] = "SurfaceView[UdfpsControllerOverlay]";
++  layer_stack_.flags.fod_pressed_present = false;
++#endif
+   display_rect_ = LayerRect();
+   layer_stack_.flags.use_metadata_refresh_rate = false;
+   layer_stack_.flags.animating = animating_;
+@@ -1061,6 +1066,30 @@ void SDMDisplay::BuildLayerStack() {
+     layer->layer_id = sdm_layer->GetId();
+     layer->layer_name = sdm_layer->GetName();
+ 
++#ifdef OPLUS_FINGERPRINT_MASK
++    const bool name_match =
++        layer->layer_name.find(kOplusTouchedLayerName) != std::string::npos;
++    if (name_match && layer->input_buffer.buffer_id != 0) {
++      layer_stack_.flags.fod_pressed_present = true;
++    }
++
++    // Visibility is diagnostic only in this root-cause verification build.
++    if (UdfpsV5Enabled() && name_match) {
++      bool has_valid_visible_region = false;
++      for (const auto &region : layer->visible_regions) {
++        has_valid_visible_region |= IsValid(region);
++      }
++      UdfpsV5Log("stage=input_candidate display=%llu layer_id=%llu name_match=%d "
++                 "buffer_valid=%d plane_alpha=%u visible_region_count=%zu "
++                 "has_valid_visible_region=%d",
++                 static_cast<unsigned long long>(id_),
++                 static_cast<unsigned long long>(layer->layer_id), name_match,
++                 layer->input_buffer.buffer_id != 0,
++                 static_cast<unsigned>(layer->plane_alpha), layer->visible_regions.size(),
++                 has_valid_visible_region);
++    }
++#endif
++
+     UdfpsV5Log("stage=input display=%llu layer_id=%llu buffer_id=%llu handle_id=%llu "
+                "layer_name=\"%s\" name_bytes=%zu buffer_valid=%d requested_composition=%d",
+                static_cast<unsigned long long>(id_),
+@@ -1086,9 +1115,10 @@ void SDMDisplay::BuildLayerStack() {
+     }
+     const size_t shown = layer_stack_.layers.size() < 8 ? layer_stack_.layers.size() : 8;
+     UdfpsV5Log("stage=input_summary display=%llu input_layer_count=%zu shown=%zu omitted=%zu "
+-               "input_udfps=%d input_udfps_index=%d",
++               "input_udfps=%d input_udfps_index=%d input_pressed=%d",
+                static_cast<unsigned long long>(id_), layer_stack_.layers.size(), shown,
+-               layer_stack_.layers.size() - shown, input_udfps_index >= 0, input_udfps_index);
++               layer_stack_.layers.size() - shown, input_udfps_index >= 0, input_udfps_index,
++               layer_stack_.flags.fod_pressed_present);
+   }
+ 
+   // TODO(user): Set correctly when SDM supports geometry_changes as bitmask
+-- 
+2.55.0
+
