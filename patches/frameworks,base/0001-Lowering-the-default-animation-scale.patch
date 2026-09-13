@@ -1,7 +1,7 @@
-From b692dd2a0c5200d632f985d72a4e2c8c77ad0d2e Mon Sep 17 00:00:00 2001
+From 5ed5ce0741b2aca6c9a29897bb8c47bcd4bcbb57 Mon Sep 17 00:00:00 2001
 From: RobertGarciaa <chae0218@naver.com>
 Date: Wed, 19 Aug 2026 12:47:20 +0900
-Subject: [PATCH] Lowering the default animation scale
+Subject: [PATCH 1/7] Lowering the default animation scale
 
 Change-Id: Ie212218c1f5812502e0559d2433656195b618652
 Signed-off-by: RobertGarciaa <chae0218@naver.com>

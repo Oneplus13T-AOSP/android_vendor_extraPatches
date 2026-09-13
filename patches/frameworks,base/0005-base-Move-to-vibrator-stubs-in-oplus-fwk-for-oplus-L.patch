@@ -1,7 +1,7 @@
-From 85b5479e418adc9585956ed6b8f5d19723d27a5c Mon Sep 17 00:00:00 2001
+From 9b83fae2dba7f71fdbe3e63bcadba90b315b7c3f Mon Sep 17 00:00:00 2001
 From: Kill3rEz <98993017+Kill3rEz@users.noreply.github.com>
 Date: Sat, 11 Jul 2026 13:09:20 +0800
-Subject: [PATCH 4/5] base: Move to vibrator stubs in oplus-fwk for oplus
+Subject: [PATCH 5/7] base: Move to vibrator stubs in oplus-fwk for oplus
  LinearmotorVibratorService
 
 ---
@@ -18,7 +18,7 @@ Subject: [PATCH 4/5] base: Move to vibrator stubs in oplus-fwk for oplus
  delete mode 100644 core/java/com/oplus/os/WaveformEffect.java
 
 diff --git a/Android.bp b/Android.bp
-index c8fd90503..12417ca51 100644
+index c8fd90503f46..12417ca51b39 100644
 --- a/Android.bp
 +++ b/Android.bp
 @@ -480,6 +480,7 @@ java_defaults {
@@ -39,7 +39,7 @@ index c8fd90503..12417ca51 100644
          true: [],
 diff --git a/core/java/com/oplus/os/ILinearmotorVibratorService.aidl b/core/java/com/oplus/os/ILinearmotorVibratorService.aidl
 deleted file mode 100644
-index 0461a1c2f..000000000
+index 0461a1c2f8c7..000000000000
 --- a/core/java/com/oplus/os/ILinearmotorVibratorService.aidl
 +++ /dev/null
 @@ -1,13 +0,0 @@
@@ -58,7 +58,7 @@ index 0461a1c2f..000000000
 -}
 diff --git a/core/java/com/oplus/os/LinearmotorVibrator.java b/core/java/com/oplus/os/LinearmotorVibrator.java
 deleted file mode 100644
-index 489074efd..000000000
+index 489074efd514..000000000000
 --- a/core/java/com/oplus/os/LinearmotorVibrator.java
 +++ /dev/null
 @@ -1,44 +0,0 @@
@@ -108,7 +108,7 @@ index 489074efd..000000000
 -}
 diff --git a/core/java/com/oplus/os/WaveformEffect.aidl b/core/java/com/oplus/os/WaveformEffect.aidl
 deleted file mode 100644
-index 8d821aee2..000000000
+index 8d821aee2e7c..000000000000
 --- a/core/java/com/oplus/os/WaveformEffect.aidl
 +++ /dev/null
 @@ -1,8 +0,0 @@
@@ -122,7 +122,7 @@ index 8d821aee2..000000000
 -parcelable WaveformEffect;
 diff --git a/core/java/com/oplus/os/WaveformEffect.java b/core/java/com/oplus/os/WaveformEffect.java
 deleted file mode 100644
-index 8466f78be..000000000
+index 8466f78bed1a..000000000000
 --- a/core/java/com/oplus/os/WaveformEffect.java
 +++ /dev/null
 @@ -1,97 +0,0 @@
@@ -224,7 +224,7 @@ index 8466f78be..000000000
 -    }
 -}
 diff --git a/services/core/Android.bp b/services/core/Android.bp
-index 3cb1b961d..2835d4b30 100644
+index 3cb1b961d38c..2835d4b30ea9 100644
 --- a/services/core/Android.bp
 +++ b/services/core/Android.bp
 @@ -170,6 +170,7 @@ java_library_static {
@@ -236,5 +236,5 @@ index 3cb1b961d..2835d4b30 100644
          "monet",
          "power_hint_flags_lib",
 -- 
-2.47.3
+2.55.0
 

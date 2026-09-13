@@ -1,7 +1,7 @@
-From b39dff1e016dcd77cabf9007d62621228beb4219 Mon Sep 17 00:00:00 2001
+From 887efed03aeef9a7262caccb99e7daede4c949cb Mon Sep 17 00:00:00 2001
 From: Kill3rEz <98993017+Kill3rEz@users.noreply.github.com>
 Date: Fri, 10 Jul 2026 12:43:59 +0200
-Subject: [PATCH 2/5] Enhance LinearmotorVibratorService with new methods
+Subject: [PATCH 3/7] Enhance LinearmotorVibratorService with new methods
 
 Updated the vibrate method to include uid, opPkg, and token parameters. Added new methods for canceling vibration, getting vibrator status, and managing settings related to vibration strength and styles. For fixing vibration on Oplus Camera
 ---
@@ -9,7 +9,7 @@ Updated the vibrate method to include uid, opPkg, and token parameters. Added ne
  1 file changed, 55 insertions(+), 1 deletion(-)
 
 diff --git a/services/core/java/com/android/server/vibrator/LinearmotorVibratorService.java b/services/core/java/com/android/server/vibrator/LinearmotorVibratorService.java
-index c98a0c508..6d3877203 100644
+index c98a0c5089ec..6d38772031c6 100644
 --- a/services/core/java/com/android/server/vibrator/LinearmotorVibratorService.java
 +++ b/services/core/java/com/android/server/vibrator/LinearmotorVibratorService.java
 @@ -7,6 +7,7 @@ package com.android.server.vibrator;
@@ -97,5 +97,5 @@ index c98a0c508..6d3877203 100644
  
      public LinearmotorVibratorService(Context context) {
 -- 
-2.47.3
+2.55.0
 

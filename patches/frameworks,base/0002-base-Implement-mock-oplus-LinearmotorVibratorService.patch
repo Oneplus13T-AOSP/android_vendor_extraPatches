@@ -1,7 +1,7 @@
-From 94e5830bdfb47a6b1b8fdce637009aed7c9a8319 Mon Sep 17 00:00:00 2001
+From 7dfefc352478b5335f333303ffb2194c5baf28e6 Mon Sep 17 00:00:00 2001
 From: cjh1249131356 <cjh1249131356@gmail.com>
 Date: Tue, 16 Jun 2026 04:55:11 +0000
-Subject: [PATCH 1/5] base: Implement mock oplus LinearmotorVibratorService
+Subject: [PATCH 2/7] base: Implement mock oplus LinearmotorVibratorService
 
 ---
  .../android/app/SystemServiceRegistry.java    | 11 +++
@@ -20,7 +20,7 @@ Subject: [PATCH 1/5] base: Implement mock oplus LinearmotorVibratorService
  create mode 100644 services/core/java/com/android/server/vibrator/LinearmotorVibratorService.java
 
 diff --git a/core/java/android/app/SystemServiceRegistry.java b/core/java/android/app/SystemServiceRegistry.java
-index cc0e7b5cb..552f419e1 100644
+index cc0e7b5cb7fa..552f419e116b 100644
 --- a/core/java/android/app/SystemServiceRegistry.java
 +++ b/core/java/android/app/SystemServiceRegistry.java
 @@ -27,6 +27,8 @@ import static android.permission.flags.Flags.assistSettingsPrivacyImprovementsEn
@@ -49,7 +49,7 @@ index cc0e7b5cb..552f419e1 100644
                  new CachedServiceFetcher<>() {
                      @Override
 diff --git a/core/java/android/content/Context.java b/core/java/android/content/Context.java
-index f0bd86d90..0304ae9bc 100644
+index f0bd86d90e1b..0304ae9bcc14 100644
 --- a/core/java/android/content/Context.java
 +++ b/core/java/android/content/Context.java
 @@ -7264,6 +7264,16 @@ public abstract class Context {
@@ -71,7 +71,7 @@ index f0bd86d90..0304ae9bc 100644
       * {@link android.provider.BlockedNumbersManager} for accessing the blocked number service.
 diff --git a/core/java/com/oplus/os/ILinearmotorVibratorService.aidl b/core/java/com/oplus/os/ILinearmotorVibratorService.aidl
 new file mode 100644
-index 000000000..0461a1c2f
+index 000000000000..0461a1c2f8c7
 --- /dev/null
 +++ b/core/java/com/oplus/os/ILinearmotorVibratorService.aidl
 @@ -0,0 +1,13 @@
@@ -90,7 +90,7 @@ index 000000000..0461a1c2f
 +}
 diff --git a/core/java/com/oplus/os/LinearmotorVibrator.java b/core/java/com/oplus/os/LinearmotorVibrator.java
 new file mode 100644
-index 000000000..489074efd
+index 000000000000..489074efd514
 --- /dev/null
 +++ b/core/java/com/oplus/os/LinearmotorVibrator.java
 @@ -0,0 +1,44 @@
@@ -140,7 +140,7 @@ index 000000000..489074efd
 +}
 diff --git a/core/java/com/oplus/os/WaveformEffect.aidl b/core/java/com/oplus/os/WaveformEffect.aidl
 new file mode 100644
-index 000000000..8d821aee2
+index 000000000000..8d821aee2e7c
 --- /dev/null
 +++ b/core/java/com/oplus/os/WaveformEffect.aidl
 @@ -0,0 +1,8 @@
@@ -154,7 +154,7 @@ index 000000000..8d821aee2
 +parcelable WaveformEffect;
 diff --git a/core/java/com/oplus/os/WaveformEffect.java b/core/java/com/oplus/os/WaveformEffect.java
 new file mode 100644
-index 000000000..8466f78be
+index 000000000000..8466f78bed1a
 --- /dev/null
 +++ b/core/java/com/oplus/os/WaveformEffect.java
 @@ -0,0 +1,97 @@
@@ -257,7 +257,7 @@ index 000000000..8466f78be
 +}
 diff --git a/services/core/java/com/android/server/vibrator/LinearmotorVibratorService.java b/services/core/java/com/android/server/vibrator/LinearmotorVibratorService.java
 new file mode 100644
-index 000000000..c98a0c508
+index 000000000000..c98a0c5089ec
 --- /dev/null
 +++ b/services/core/java/com/android/server/vibrator/LinearmotorVibratorService.java
 @@ -0,0 +1,55 @@
@@ -317,7 +317,7 @@ index 000000000..c98a0c508
 +    }
 +}
 diff --git a/services/java/com/android/server/SystemServer.java b/services/java/com/android/server/SystemServer.java
-index 99aa6afc4..52fd33f0a 100644
+index 99aa6afc402d..52fd33f0a196 100644
 --- a/services/java/com/android/server/SystemServer.java
 +++ b/services/java/com/android/server/SystemServer.java
 @@ -319,6 +319,7 @@ import com.android.server.usage.StorageStatsService;
@@ -340,5 +340,5 @@ index 99aa6afc4..52fd33f0a 100644
          mSystemServiceManager.startService(MediaProjectionManagerService.class);
          t.traceEnd();
 -- 
-2.47.3
+2.55.0
 
