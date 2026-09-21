@@ -1,0 +1,46 @@
+From 54c01b92fc0c8826fd9ee5187615142b9e1535ee Mon Sep 17 00:00:00 2001
+From: RobertGarciaa <chae0218@naver.com>
+Date: Sat, 19 Sep 2026 12:00:00 +0900
+Subject: [PATCH] display: add a product opt-in for OPlus input press
+ preservation
+
+Expose qtidisplay.oplus_udfps_input_press as an independent boolean in
+qtidisplay_common_defaults. Set OPLUS_UDFPS_INPUT_PRESS=1 only for a
+product selecting this option.
+
+Leave the existing oplus_udfps setting and all defaults unchanged. The
+matching display-core change also requires OPLUS_FINGERPRINT_MASK, so
+this option alone does not enable the OPlus mask path. Opt products in
+separately after verifying their layer and panel contract.
+
+Change-Id: I7d92010c8dac94381d39cbf8c53b65377a5e2aa7
+Signed-off-by: RobertGarciaa <chae0218@naver.com>
+---
+ Android.bp | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/Android.bp b/Android.bp
+index 7730e76dcf2849a370e320053bfb37525b12d5e2..94d7d81906604fc815a3bb0b4e817ef4d7726adf 100644
+--- a/Android.bp
++++ b/Android.bp
+@@ -9,6 +9,7 @@ soong_config_module_type {
+         "gralloc4",
+         "udfps",
+         "oplus_udfps",
++        "oplus_udfps_input_press",
+         "samsung_udfps",
+         "default",
+         "var3",
+@@ -164,6 +165,10 @@ qtidisplay_cc_defaults {
+             ],
+             include_dirs: ["frameworks/native/services/surfaceflinger/CompositionEngine/include/compositionengine"],
+         },
++        // Default off: this is separate from general OPlus UDFPS support.
++        oplus_udfps_input_press: {
++            cflags: ["-DOPLUS_UDFPS_INPUT_PRESS=1"],
++        },
+         samsung_udfps: {
+             cflags: [
+                 "-DCONNECTOR_PROP_UDFPS",
+
+base-commit: 28edbb21cf722c6ce5acdd7711af9cc692167a12
