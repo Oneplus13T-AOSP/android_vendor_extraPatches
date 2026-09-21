@@ -1,0 +1,93 @@
+From feabd20f0929ec4e5552cd641551f6d06e495700 Mon Sep 17 00:00:00 2001
+From: RobertGarciaa <chae0218@naver.com>
+Date: Sat, 19 Sep 2026 12:00:00 +0900
+Subject: [PATCH] display: preserve OPlus UDFPS press semantic across
+ composition
+
+The touched UDFPS layer can be present in the input LayerStack but absent
+from the final hardware layer list after composition. Preserve its press
+semantic for products selecting OPLUS_UDFPS_INPUT_PRESS=1 in addition to
+the existing OPLUS_FINGERPRINT_MASK support.
+
+Accumulate the existing touched-name substring match with a nonzero
+buffer across input layers, then OR it into the current-frame common
+flags after the loop. This avoids a later non-FOD layer clearing the
+newly observed press when UDFPS_ZPOS is also enabled. In SetupAtomic,
+OR common press into the legacy primary-panel fingerprint mask.
+
+Keep the legacy layer scan, ZPOS policy, alpha/visibility behavior, mask
+cache and Validate/AtomicCommit/TEST_ONLY handling unchanged. Undefined
+or zero input-press opt-in retains the original preprocessing paths.
+
+Require the integer value 1 for input-press preservation. Undefined,
+zero and other values retain the legacy mask behavior.
+
+Change-Id: Id4339f129afb076f57eef322720e07df025d277f
+Signed-off-by: RobertGarciaa <chae0218@naver.com>
+---
+ sdm/libs/dal/hw_device_drm.cpp |  8 ++++++++
+ sdmclient/sdm_display.cpp      | 19 +++++++++++++++++++
+ 2 files changed, 27 insertions(+)
+
+diff --git a/sdm/libs/dal/hw_device_drm.cpp b/sdm/libs/dal/hw_device_drm.cpp
+index 635378861ba3a87ad641c0ddae365096fa64941f..1cbcc51d87a0a39da93f86115c9a30a903c8b2b4 100644
+--- a/sdm/libs/dal/hw_device_drm.cpp
++++ b/sdm/libs/dal/hw_device_drm.cpp
+@@ -1681,6 +1681,14 @@ void HWDeviceDRM::SetupAtomic(Fence::ScopedRef &scoped_ref, HWLayersInfo *hw_lay
+       }
+     }
+ 
++#if defined(OPLUS_UDFPS_INPUT_PRESS) && OPLUS_UDFPS_INPUT_PRESS == 1
++    // Opted-in OPlus products preserve input press state across composition.
++    if (hw_layers_info->common_info &&
++        hw_layers_info->common_info->flags.fod_pressed_present) {
++      mask_state |= OPLUS_OFP_PROPERTY_FINGERPRESS_LAYER;
++    }
++#endif
++
+     if (current_mask_state_ != mask_state) {
+       current_mask_state_ = mask_state;
+       drm_atomic_intf_->Perform(DRMOps::CONNECTOR_SET_FINGERPRINT_MASK, token_.conn_id, mask_state);
+diff --git a/sdmclient/sdm_display.cpp b/sdmclient/sdm_display.cpp
+index bd3419483cc7e20fea9b1d4edbad917c04d8ee67..0d42de4389186bc8caf086839c17db5a9d860281 100644
+--- a/sdmclient/sdm_display.cpp
++++ b/sdmclient/sdm_display.cpp
+@@ -800,6 +800,12 @@ static bool IsHDRLayerPresent(Layer *layer) {
+ 
+ void SDMDisplay::BuildLayerStack() {
+   layer_stack_ = LayerStack();
++#if defined(OPLUS_FINGERPRINT_MASK) && defined(OPLUS_UDFPS_INPUT_PRESS) && \
++    OPLUS_UDFPS_INPUT_PRESS == 1
++  // Keep this accumulator independent of the per-layer UDFPS_ZPOS flags.
++  const char kOplusTouchedLayerName[] = "SurfaceView[UdfpsControllerOverlay]";
++  bool oplus_input_pressed = false;
++#endif
+   display_rect_ = LayerRect();
+   layer_stack_.flags.use_metadata_refresh_rate = false;
+   layer_stack_.flags.animating = animating_;
+@@ -1018,10 +1024,23 @@ void SDMDisplay::BuildLayerStack() {
+ 
+     layer->layer_id = sdm_layer->GetId();
+     layer->layer_name = sdm_layer->GetName();
++#if defined(OPLUS_FINGERPRINT_MASK) && defined(OPLUS_UDFPS_INPUT_PRESS) && \
++    OPLUS_UDFPS_INPUT_PRESS == 1
++    if (layer->layer_name.find(kOplusTouchedLayerName) != std::string::npos &&
++        layer->input_buffer.buffer_id != 0) {
++      oplus_input_pressed = true;
++    }
++#endif
+     layer->geometry_changes = sdm_layer->GetGeometryChanges();
+     layer_stack_.layers.push_back(layer);
+   }
+ 
++#if defined(OPLUS_FINGERPRINT_MASK) && defined(OPLUS_UDFPS_INPUT_PRESS) && \
++    OPLUS_UDFPS_INPUT_PRESS == 1
++  // A later non-FOD layer must not erase an earlier touched-layer match.
++  layer_stack_.flags.fod_pressed_present |= oplus_input_pressed;
++#endif
++
+   // TODO(user): Set correctly when SDM supports geometry_changes as bitmask
+   geometry_changes_ |= sdm_layer_stack_->geometry_changes_;
+   layer_stack_.flags.geometry_changed =
+
+base-commit: 89aa1914da50aae0fb1b2ebf3db38d34fba5f748
