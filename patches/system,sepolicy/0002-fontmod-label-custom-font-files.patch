@@ -1,0 +1,46 @@
+From 53ed88c4faba910e419358dce440bc9a4720a15f Mon Sep 17 00:00:00 2001
+From: FontMod <fontmod@localhost>
+Date: Tue, 3 Nov 2026 16:18:43 +0900
+Subject: [PATCH] sepolicy: label FontMod files as font data
+
+Label the custom font directory with the existing font data type.
+Cover both the directory and an imported font in the file contexts test
+data so plat_file_contexts_data_test validates the new rule.
+
+Custom font writes remain restricted to UPDATE_FONTS and the owner user.
+The signed font updater and its fs-verity validation remain unchanged.
+
+Base: 99c58a7cc9a44fe33c93808452d018e756d84753
+---
+ contexts/file_contexts_test_data | 2 ++
+ private/file_contexts            | 1 +
+ 2 files changed, 3 insertions(+)
+
+diff --git a/contexts/file_contexts_test_data b/contexts/file_contexts_test_data
+index 999976f..54343f4 100644
+--- a/contexts/file_contexts_test_data
++++ b/contexts/file_contexts_test_data
+@@ -964,6 +964,8 @@
+ /data/rollback/999/test/test.apex                                 staging_data_file
+ /data/fonts/files                                                 font_data_file
+ /data/fonts/files/test                                            font_data_file
++/data/fonts/fontmod                                               font_data_file
++/data/fonts/fontmod/test.font                                     font_data_file
+ /data/misc_ce                                                     system_userdir_file
+ /data/misc_de                                                     system_userdir_file
+ /data/system_ce                                                   system_userdir_file
+diff --git a/private/file_contexts b/private/file_contexts
+index 56977a1..cbbd103 100644
+--- a/private/file_contexts
++++ b/private/file_contexts
+@@ -664,6 +664,7 @@
+ /data/rollback/\d+/[^/]+/.*\.apk  u:object_r:apk_data_file:s0
+ /data/rollback/\d+/[^/]+/.*\.apex u:object_r:staging_data_file:s0
+ /data/fonts/files(/.*)?     u:object_r:font_data_file:s0
++/data/fonts/fontmod(/.*)?   u:object_r:font_data_file:s0
+ /data/misc_ce             u:object_r:system_userdir_file:s0
+ /data/misc_de             u:object_r:system_userdir_file:s0
+ /data/system_ce           u:object_r:system_userdir_file:s0
+-- 
+2.56.0
+

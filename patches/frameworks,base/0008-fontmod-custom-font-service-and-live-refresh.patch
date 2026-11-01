@@ -1,0 +1,1115 @@
+From 4501f0217cac9f335e029044731d1507942a4aee Mon Sep 17 00:00:00 2001
+From: FontMod <fontmod@localhost>
+Date: Sun, 1 Nov 2026 18:30:00 +0900
+Subject: [PATCH] fonts: add isolated custom font storage and live process
+ refresh
+
+Base: 044b965aa2d30d056b930e5ff013ba5303cde9fa
+Custom font writes remain restricted to UPDATE_FONTS and the owner user.
+The signed font updater and its fs-verity validation remain unchanged.
+---
+ core/java/android/app/ActivityThread.java     |   1 +
+ .../android/graphics/fonts/FontManager.java   |  21 ++
+ core/java/android/widget/TextView.java        |  16 ++
+ .../internal/graphics/fonts/IFontManager.aidl |   6 +
+ .../graphics/fonts/IFontModCallback.aidl      |   9 +
+ .../java/android/graphics/FontModRuntime.java | 122 ++++++++++
+ graphics/java/android/graphics/Paint.java     |  96 +++++---
+ graphics/java/android/graphics/Typeface.java  | 117 ++++++++-
+ .../graphics/fonts/FontManagerService.java    |  87 +++++++
+ .../server/graphics/fonts/FontModStore.java   | 223 ++++++++++++++++++
+ 10 files changed, 661 insertions(+), 37 deletions(-)
+ create mode 100644 core/java/com/android/internal/graphics/fonts/IFontModCallback.aidl
+ create mode 100644 graphics/java/android/graphics/FontModRuntime.java
+ create mode 100644 services/core/java/com/android/server/graphics/fonts/FontModStore.java
+
+diff --git a/core/java/android/app/ActivityThread.java b/core/java/android/app/ActivityThread.java
+index b7d9f65..b29e6db 100644
+--- a/core/java/android/app/ActivityThread.java
++++ b/core/java/android/app/ActivityThread.java
+@@ -8276,6 +8276,7 @@ public final class ActivityThread extends ClientTransactionHandler
+             sendMessage(H.SET_CONTENT_CAPTURE_OPTIONS_CALLBACK, data.appInfo.packageName);
+ 
+             mInitialApplication = app;
++            android.graphics.FontModRuntime.initialize(app);
+             final boolean updateHttpProxy;
+             synchronized (this) {
+                 updateHttpProxy = mUpdateHttpProxyOnBind;
+diff --git a/core/java/android/graphics/fonts/FontManager.java b/core/java/android/graphics/fonts/FontManager.java
+index 669f9d9..1045b22 100644
+--- a/core/java/android/graphics/fonts/FontManager.java
++++ b/core/java/android/graphics/fonts/FontManager.java
+@@ -410,6 +410,27 @@ public class FontManager {
+     }
+ 
+ 
++    /** @hide */
++    public @NonNull String getFontModState() {
++        try { return mIFontManager.getFontModState(); }
++        catch (RemoteException e) { throw e.rethrowFromSystemServer(); }
++    }
++
++    /** @hide */
++    @RequiresPermission(Manifest.permission.UPDATE_FONTS)
++    public @NonNull String installFontModFont(android.os.ParcelFileDescriptor fd,
++            String expectedSha256, long expectedGeneration) {
++        try { return mIFontManager.installFontModFont(fd, expectedSha256, expectedGeneration); }
++        catch (RemoteException e) { throw e.rethrowFromSystemServer(); }
++    }
++
++    /** @hide */
++    @RequiresPermission(Manifest.permission.UPDATE_FONTS)
++    public @NonNull String clearFontModFont(long expectedGeneration) {
++        try { return mIFontManager.clearFontModFont(expectedGeneration); }
++        catch (RemoteException e) { throw e.rethrowFromSystemServer(); }
++    }
++
+     /**
+      * Factory method of the FontManager.
+      *
+diff --git a/core/java/android/widget/TextView.java b/core/java/android/widget/TextView.java
+index c89d3fc..fbdfe19 100644
+--- a/core/java/android/widget/TextView.java
++++ b/core/java/android/widget/TextView.java
+@@ -4666,6 +4666,22 @@ public class TextView extends View implements ViewTreeObserver.OnPreDrawListener
+         }
+     }
+ 
++    /**
++     * Invalidate old measured layouts after a live system-font change.
++     *
++     * @hide
++     */
++    public void refreshFontModTypeface() {
++        setTypeface(mOriginalTypeface);
++        if (mPrecomputed != null) {
++            // Retain text/spans but discard metrics computed with the old font.
++            setTextInternal(new android.text.SpannableString(mText));
++        }
++        nullLayouts();
++        requestLayout();
++        invalidate();
++    }
++
+     @Override
+     protected void onConfigurationChanged(Configuration newConfig) {
+         super.onConfigurationChanged(newConfig);
+diff --git a/core/java/com/android/internal/graphics/fonts/IFontManager.aidl b/core/java/com/android/internal/graphics/fonts/IFontManager.aidl
+index f38b5c9..b8c29cd 100644
+--- a/core/java/com/android/internal/graphics/fonts/IFontManager.aidl
++++ b/core/java/com/android/internal/graphics/fonts/IFontManager.aidl
+@@ -19,6 +19,7 @@ package com.android.internal.graphics.fonts;
+ import android.os.ParcelFileDescriptor;
+ import android.graphics.fonts.FontUpdateRequest;
+ import android.text.FontConfig;
++import com.android.internal.graphics.fonts.IFontModCallback;
+ 
+ import java.util.List;
+ 
+@@ -34,4 +35,9 @@ interface IFontManager {
+     int updateFontFamily(in List<FontUpdateRequest> request, int baseVersion);
+ 
+     int updateFontFallbacks(in List<FontUpdateRequest> fallbackRequests);
++
++    String getFontModState();
++    String registerFontModCallback(IFontModCallback callback);
++    String installFontModFont(in ParcelFileDescriptor fd, String expectedSha256, long expectedGeneration);
++    String clearFontModFont(long expectedGeneration);
+ }
+diff --git a/core/java/com/android/internal/graphics/fonts/IFontModCallback.aidl b/core/java/com/android/internal/graphics/fonts/IFontModCallback.aidl
+new file mode 100644
+index 0000000..db5471b
+--- /dev/null
++++ b/core/java/com/android/internal/graphics/fonts/IFontModCallback.aidl
+@@ -0,0 +1,9 @@
++/* Copyright (C) 2026 The Android Open Source Project
++ * SPDX-License-Identifier: Apache-2.0
++ */
++package com.android.internal.graphics.fonts;
++
++/** Read-only selection notifications. @hide */
++oneway interface IFontModCallback {
++    void onFontModChanged(String state);
++}
+diff --git a/graphics/java/android/graphics/FontModRuntime.java b/graphics/java/android/graphics/FontModRuntime.java
+new file mode 100644
+index 0000000..f750430
+--- /dev/null
++++ b/graphics/java/android/graphics/FontModRuntime.java
+@@ -0,0 +1,122 @@
++/* Copyright (C) 2026 The Android Open Source Project
++ * SPDX-License-Identifier: Apache-2.0
++ */
++package android.graphics;
++
++import android.annotation.NonNull;
++import android.app.Application;
++import android.content.Context;
++import android.graphics.fonts.Font;
++import android.graphics.fonts.FontFamily;
++import android.os.Handler;
++import android.os.Looper;
++import android.os.ServiceManager;
++import android.util.Log;
++import android.view.View;
++import android.view.ViewGroup;
++import android.view.WindowManagerGlobal;
++import android.widget.TextView;
++
++import com.android.internal.graphics.fonts.IFontManager;
++import com.android.internal.graphics.fonts.IFontModCallback;
++import com.android.internal.os.BackgroundThread;
++
++import org.json.JSONObject;
++import java.io.File;
++import java.util.ArrayDeque;
++
++/**
++ * Per-process live font refresh. Native web/map renderers remain independent.
++ *
++ * @hide
++ */
++public final class FontModRuntime {
++    private static final String TAG = "FontModRuntime";
++    private static final Handler MAIN = new Handler(Looper.getMainLooper());
++    private static boolean sInitialized;
++    private static long sGeneration = -1;
++    private static final IFontModCallback CALLBACK = new IFontModCallback.Stub() {
++        @Override public void onFontModChanged(String state) {
++            BackgroundThread.getHandler().post(() -> prepare(state, false));
++        }
++    };
++
++    private FontModRuntime() { }
++
++    public static void initialize(@NonNull Context context) {
++        if (sInitialized) return;
++        try {
++            IFontManager service = IFontManager.Stub.asInterface(
++                    ServiceManager.getService(Context.FONT_SERVICE));
++            if (service == null) return;
++            String state = service.registerFontModCallback(CALLBACK);
++            sInitialized = true;
++            // Initial selection is installed before Application.onCreate and content providers.
++            prepare(state, true);
++            if (context instanceof Application) {
++                ((Application) context).registerActivityLifecycleCallbacks(
++                        new Application.ActivityLifecycleCallbacks() {
++                    @Override public void onActivityResumed(android.app.Activity activity) {
++                        refreshViews(activity.getWindow().getDecorView());
++                    }
++                    @Override public void onActivityCreated(android.app.Activity a, android.os.Bundle b) { }
++                    @Override public void onActivityStarted(android.app.Activity a) { }
++                    @Override public void onActivityPaused(android.app.Activity a) { }
++                    @Override public void onActivityStopped(android.app.Activity a) { }
++                    @Override public void onActivitySaveInstanceState(android.app.Activity a, android.os.Bundle b) { }
++                    @Override public void onActivityDestroyed(android.app.Activity a) { }
++                });
++            }
++        } catch (Exception e) {
++            Log.e(TAG, "Cannot initialize live custom fonts; retaining current fonts", e);
++        }
++    }
++
++    private static void prepare(String state, boolean initial) {
++        try {
++            JSONObject value = new JSONObject(state);
++            if (value.getInt("version") != 1) throw new IllegalArgumentException("Unknown state");
++            String id = value.getString("id");
++            String path = value.getString("path");
++            long generation = value.getLong("generation");
++            FontFamily family = null;
++            if (!id.isEmpty()) {
++                if (!id.matches("[a-f0-9]{64}")
++                        || !path.equals("/data/fonts/fontmod/" + id + ".font")) {
++                    throw new IllegalArgumentException("Invalid custom font path");
++                }
++                family = new FontFamily.Builder(new Font.Builder(new File(path)).build()).build();
++            }
++            FontFamily prepared = family;
++            Runnable apply = () -> {
++                if (generation <= sGeneration) return;
++                try {
++                    Typeface.setFontModFont(prepared);
++                    sGeneration = generation;
++                    for (View view : WindowManagerGlobal.getInstance().getWindowViews()) {
++                        refreshViews(view);
++                    }
++                } catch (RuntimeException e) { Log.e(TAG, "Cannot refresh custom fonts", e); }
++            };
++            if (initial && Looper.myLooper() == Looper.getMainLooper()) apply.run();
++            else MAIN.post(apply);
++        } catch (Exception e) {
++            Log.e(TAG, "Cannot load selected custom font; retaining current fonts", e);
++        }
++    }
++
++    private static void refreshViews(View root) {
++        if (Typeface.getFontModGeneration() == 0) return;
++        ArrayDeque<View> pending = new ArrayDeque<>(); pending.add(root);
++        while (!pending.isEmpty()) {
++            View view = pending.removeFirst();
++            if (view instanceof TextView) ((TextView) view).refreshFontModTypeface();
++            if (view instanceof ViewGroup) {
++                ViewGroup group = (ViewGroup) view;
++                for (int i = 0; i < group.getChildCount(); i++) pending.add(group.getChildAt(i));
++            }
++            // Custom Canvas text (e.g. messaging UIs) refreshes Paint lazily on use.
++            view.requestLayout(); view.invalidate();
++        }
++    }
++}
+diff --git a/graphics/java/android/graphics/Paint.java b/graphics/java/android/graphics/Paint.java
+index 98973ec..5197199 100644
+--- a/graphics/java/android/graphics/Paint.java
++++ b/graphics/java/android/graphics/Paint.java
+@@ -91,6 +91,8 @@ public class Paint {
+     private Shader          mShader;
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P, trackingBug = 115609023)
+     private Typeface        mTypeface;
++    private Typeface mFontModOriginalTypeface;
++    private int mFontModGeneration = -1;
+     private Xfermode        mXfermode;
+ 
+     private boolean         mHasCompatScaling;
+@@ -743,6 +745,8 @@ public class Paint {
+         mNativeShader = 0;
+         mNativeXfermode = 0;
+         mTypeface = null;
++        mFontModOriginalTypeface = null;
++        mFontModGeneration = -1;
+         mXfermode = null;
+ 
+         mHasCompatScaling = false;
+@@ -775,7 +779,7 @@ public class Paint {
+     public void set(Paint src) {
+         if (this != src) {
+             // copy over the native settings
+-            nSet(mNativePaint, src.mNativePaint);
++            nSet(mNativePaint, src.getNativeTextInstance());
+             setClassVariablesFrom(src);
+         }
+     }
+@@ -792,6 +796,8 @@ public class Paint {
+         mShader = paint.mShader;
+         mNativeShader = paint.mNativeShader;
+         mTypeface = paint.mTypeface;
++        mFontModOriginalTypeface = paint.mFontModOriginalTypeface;
++        mFontModGeneration = paint.mFontModGeneration;
+         mXfermode = paint.mXfermode;
+         mNativeXfermode = paint.mNativeXfermode;
+ 
+@@ -836,6 +842,7 @@ public class Paint {
+      */
+     @UnsupportedAppUsage
+     public synchronized long getNativeInstance() {
++        refreshFontModTypeface();
+         boolean filter = isFilterBitmap();
+         long newNativeShader = mShader == null ? 0 : mShader.getNativeInstance(filter);
+         if (newNativeShader != mNativeShader) {
+@@ -1583,6 +1590,7 @@ public class Paint {
+      * @return the paint's typeface (or null)
+      */
+     public Typeface getTypeface() {
++        refreshFontModTypeface();
+         return mTypeface;
+     }
+ 
+@@ -1596,10 +1604,26 @@ public class Paint {
+      * @return         typeface
+      */
+     public Typeface setTypeface(Typeface typeface) {
++        Typeface original = typeface;
++        mFontModOriginalTypeface = original;
++        int generation = Typeface.getFontModGeneration();
++        typeface = Typeface.resolveFontModTypeface(typeface);
++        mFontModGeneration = generation;
+         final long typefaceNative = typeface == null ? 0 : typeface.getNativeInstance();
+         nSetTypeface(mNativePaint, typefaceNative);
+         mTypeface = typeface;
+-        return typeface;
++        return original;
++    }
++
++    private void refreshFontModTypeface() {
++        if (mFontModGeneration != Typeface.getFontModGeneration()) {
++            setTypeface(mFontModOriginalTypeface);
++        }
++    }
++
++    private long getNativeTextInstance() {
++        refreshFontModTypeface();
++        return mNativePaint;
+     }
+ 
+     /**
+@@ -2324,7 +2348,7 @@ public class Paint {
+      *         current typeface and text size.
+      */
+     public float ascent() {
+-        return nAscent(mNativePaint);
++        return nAscent(getNativeTextInstance());
+     }
+ 
+     /**
+@@ -2338,7 +2362,7 @@ public class Paint {
+      *         the current typeface and text size.
+      */
+     public float descent() {
+-        return nDescent(mNativePaint);
++        return nDescent(getNativeTextInstance());
+     }
+ 
+     /**
+@@ -2410,7 +2434,7 @@ public class Paint {
+      * @return the font's recommended interline spacing.
+      */
+     public float getFontMetrics(FontMetrics metrics) {
+-        return nGetFontMetrics(mNativePaint, metrics, false);
++        return nGetFontMetrics(getNativeTextInstance(), metrics, false);
+     }
+ 
+     /**
+@@ -2446,7 +2470,7 @@ public class Paint {
+      */
+     @FlaggedApi(FLAG_FIX_LINE_HEIGHT_FOR_LOCALE)
+     public void getFontMetricsForLocale(@NonNull FontMetrics metrics) {
+-        nGetFontMetrics(mNativePaint, metrics, true);
++        nGetFontMetrics(getNativeTextInstance(), metrics, true);
+     }
+ 
+     /**
+@@ -2498,13 +2522,13 @@ public class Paint {
+         }
+ 
+         if (text instanceof String) {
+-            nGetFontMetricsIntForText(mNativePaint, (String) text, start, count, contextStart,
++            nGetFontMetricsIntForText(getNativeTextInstance(), (String) text, start, count, contextStart,
+                     contextCount, isRtl, outMetrics);
+         } else {
+             char[] buf = TemporaryBuffer.obtain(contextCount);
+             try {
+                 TextUtils.getChars(text, contextStart, contextStart + contextCount, buf, 0);
+-                nGetFontMetricsIntForText(mNativePaint, buf, start - contextStart, count, 0,
++                nGetFontMetricsIntForText(getNativeTextInstance(), buf, start - contextStart, count, 0,
+                         contextCount, isRtl, outMetrics);
+             } finally {
+                 TemporaryBuffer.recycle(buf);
+@@ -2559,7 +2583,7 @@ public class Paint {
+             return;
+         }
+ 
+-        nGetFontMetricsIntForText(mNativePaint, text, start, count, contextStart, contextCount,
++        nGetFontMetricsIntForText(getNativeTextInstance(), text, start, count, contextStart, contextCount,
+                 isRtl, outMetrics);
+     }
+ 
+@@ -2656,7 +2680,7 @@ public class Paint {
+      * @return the font's interline spacing.
+      */
+     public int getFontMetricsInt(FontMetricsInt fmi) {
+-        return nGetFontMetricsInt(mNativePaint, fmi, false);
++        return nGetFontMetricsInt(getNativeTextInstance(), fmi, false);
+     }
+ 
+     public FontMetricsInt getFontMetricsInt() {
+@@ -2688,7 +2712,7 @@ public class Paint {
+      */
+     @FlaggedApi(FLAG_FIX_LINE_HEIGHT_FOR_LOCALE)
+     public void getFontMetricsIntForLocale(@NonNull FontMetricsInt metrics) {
+-        nGetFontMetricsInt(mNativePaint, metrics, true);
++        nGetFontMetricsInt(getNativeTextInstance(), metrics, true);
+     }
+ 
+     /** @hide */
+@@ -2742,13 +2766,13 @@ public class Paint {
+         try {
+ 
+             if (!mHasCompatScaling) {
+-                return (float) Math.ceil(nGetTextAdvances(mNativePaint, text,
++                return (float) Math.ceil(nGetTextAdvances(getNativeTextInstance(), text,
+                         index, count, index, count, mBidiFlags, null, 0));
+             }
+ 
+             final float oldSize = getTextSize();
+             setTextSize(oldSize * mCompatScaling);
+-            final float w = nGetTextAdvances(mNativePaint, text, index, count, index, count,
++            final float w = nGetTextAdvances(getNativeTextInstance(), text, index, count, index, count,
+                     mBidiFlags, null, 0);
+             setTextSize(oldSize);
+             return (float) Math.ceil(w * mInvCompatScaling);
+@@ -2780,12 +2804,12 @@ public class Paint {
+         setFlags(getFlags() | (TEXT_RUN_FLAG_LEFT_EDGE | TEXT_RUN_FLAG_RIGHT_EDGE));
+         try {
+             if (!mHasCompatScaling) {
+-                return (float) Math.ceil(nGetTextAdvances(mNativePaint, text,
++                return (float) Math.ceil(nGetTextAdvances(getNativeTextInstance(), text,
+                         start, end, start, end, mBidiFlags, null, 0));
+             }
+             final float oldSize = getTextSize();
+             setTextSize(oldSize * mCompatScaling);
+-            final float w = nGetTextAdvances(mNativePaint, text, start, end, start, end, mBidiFlags,
++            final float w = nGetTextAdvances(getNativeTextInstance(), text, start, end, start, end, mBidiFlags,
+                     null, 0);
+             setTextSize(oldSize);
+             return (float) Math.ceil(w * mInvCompatScaling);
+@@ -2872,13 +2896,13 @@ public class Paint {
+             return 0;
+         }
+         if (!mHasCompatScaling) {
+-            return nBreakText(mNativePaint, text, index, count, maxWidth, mBidiFlags,
++            return nBreakText(getNativeTextInstance(), text, index, count, maxWidth, mBidiFlags,
+                     measuredWidth);
+         }
+ 
+         final float oldSize = getTextSize();
+         setTextSize(oldSize * mCompatScaling);
+-        final int res = nBreakText(mNativePaint, text, index, count, maxWidth * mCompatScaling,
++        final int res = nBreakText(getNativeTextInstance(), text, index, count, maxWidth * mCompatScaling,
+                 mBidiFlags, measuredWidth);
+         setTextSize(oldSize);
+         if (measuredWidth != null) measuredWidth[0] *= mInvCompatScaling;
+@@ -2960,13 +2984,13 @@ public class Paint {
+             return 0;
+         }
+         if (!mHasCompatScaling) {
+-            return nBreakText(mNativePaint, text, measureForwards,
++            return nBreakText(getNativeTextInstance(), text, measureForwards,
+                     maxWidth, mBidiFlags, measuredWidth);
+         }
+ 
+         final float oldSize = getTextSize();
+         setTextSize(oldSize*mCompatScaling);
+-        final int res = nBreakText(mNativePaint, text, measureForwards, maxWidth*mCompatScaling,
++        final int res = nBreakText(getNativeTextInstance(), text, measureForwards, maxWidth*mCompatScaling,
+                 mBidiFlags, measuredWidth);
+         setTextSize(oldSize);
+         if (measuredWidth != null) measuredWidth[0] *= mInvCompatScaling;
+@@ -3000,14 +3024,14 @@ public class Paint {
+         setFlags(getFlags() | (TEXT_RUN_FLAG_LEFT_EDGE | TEXT_RUN_FLAG_RIGHT_EDGE));
+         try {
+             if (!mHasCompatScaling) {
+-                nGetTextAdvances(mNativePaint, text, index, count, index, count, mBidiFlags, widths,
++                nGetTextAdvances(getNativeTextInstance(), text, index, count, index, count, mBidiFlags, widths,
+                         0);
+                 return count;
+             }
+ 
+             final float oldSize = getTextSize();
+             setTextSize(oldSize * mCompatScaling);
+-            nGetTextAdvances(mNativePaint, text, index, count, index, count, mBidiFlags, widths, 0);
++            nGetTextAdvances(getNativeTextInstance(), text, index, count, index, count, mBidiFlags, widths, 0);
+             setTextSize(oldSize);
+             for (int i = 0; i < count; i++) {
+                 widths[i] *= mInvCompatScaling;
+@@ -3090,13 +3114,13 @@ public class Paint {
+         setFlags(getFlags() | (TEXT_RUN_FLAG_LEFT_EDGE | TEXT_RUN_FLAG_RIGHT_EDGE));
+         try {
+             if (!mHasCompatScaling) {
+-                nGetTextAdvances(mNativePaint, text, start, end, start, end, mBidiFlags, widths, 0);
++                nGetTextAdvances(getNativeTextInstance(), text, start, end, start, end, mBidiFlags, widths, 0);
+                 return end - start;
+             }
+ 
+             final float oldSize = getTextSize();
+             setTextSize(oldSize * mCompatScaling);
+-            nGetTextAdvances(mNativePaint, text, start, end, start, end, mBidiFlags, widths, 0);
++            nGetTextAdvances(getNativeTextInstance(), text, start, end, start, end, mBidiFlags, widths, 0);
+             setTextSize(oldSize);
+             for (int i = 0; i < end - start; i++) {
+                 widths[i] *= mInvCompatScaling;
+@@ -3183,14 +3207,14 @@ public class Paint {
+             return 0f;
+         }
+         if (!mHasCompatScaling) {
+-            return nGetTextAdvances(mNativePaint, chars, index, count, contextIndex, contextCount,
++            return nGetTextAdvances(getNativeTextInstance(), chars, index, count, contextIndex, contextCount,
+                     isRtl ? BIDI_FORCE_RTL : BIDI_FORCE_LTR, advances,
+                     advancesIndex);
+         }
+ 
+         final float oldSize = getTextSize();
+         setTextSize(oldSize * mCompatScaling);
+-        final float res = nGetTextAdvances(mNativePaint, chars, index, count, contextIndex,
++        final float res = nGetTextAdvances(getNativeTextInstance(), chars, index, count, contextIndex,
+                 contextCount, isRtl ? BIDI_FORCE_RTL : BIDI_FORCE_LTR, advances, advancesIndex);
+         setTextSize(oldSize);
+ 
+@@ -3237,7 +3261,7 @@ public class Paint {
+             throw new IndexOutOfBoundsException();
+         }
+ 
+-        return nGetTextRunCursor(mNativePaint, text, contextStart, contextLength,
++        return nGetTextRunCursor(getNativeTextInstance(), text, contextStart, contextLength,
+                 isRtl ? DIRECTION_RTL : DIRECTION_LTR, offset, cursorOpt);
+     }
+ 
+@@ -3325,7 +3349,7 @@ public class Paint {
+             throw new IndexOutOfBoundsException();
+         }
+ 
+-        return nGetTextRunCursor(mNativePaint, text, contextStart, contextEnd,
++        return nGetTextRunCursor(getNativeTextInstance(), text, contextStart, contextEnd,
+                 isRtl ? DIRECTION_RTL : DIRECTION_LTR, offset, cursorOpt);
+     }
+ 
+@@ -3346,7 +3370,7 @@ public class Paint {
+         if ((index | count) < 0 || index + count > text.length) {
+             throw new ArrayIndexOutOfBoundsException();
+         }
+-        nGetTextPath(mNativePaint, mBidiFlags, text, index, count, x, y, path.mutateNI());
++        nGetTextPath(getNativeTextInstance(), mBidiFlags, text, index, count, x, y, path.mutateNI());
+     }
+ 
+     /**
+@@ -3366,7 +3390,7 @@ public class Paint {
+         if ((start | end | (end - start) | (text.length() - end)) < 0) {
+             throw new IndexOutOfBoundsException();
+         }
+-        nGetTextPath(mNativePaint, mBidiFlags, text, start, end, x, y, path.mutateNI());
++        nGetTextPath(getNativeTextInstance(), mBidiFlags, text, start, end, x, y, path.mutateNI());
+     }
+ 
+     /**
+@@ -3387,7 +3411,7 @@ public class Paint {
+         if (bounds == null) {
+             throw new NullPointerException("need bounds Rect");
+         }
+-        nGetStringBounds(mNativePaint, text, start, end, mBidiFlags, bounds);
++        nGetStringBounds(getNativeTextInstance(), text, start, end, mBidiFlags, bounds);
+     }
+ 
+     /**
+@@ -3434,7 +3458,7 @@ public class Paint {
+         if (bounds == null) {
+             throw new NullPointerException("need bounds Rect");
+         }
+-        nGetCharArrayBounds(mNativePaint, text, index, count, mBidiFlags,
++        nGetCharArrayBounds(getNativeTextInstance(), text, index, count, mBidiFlags,
+             bounds);
+     }
+ 
+@@ -3455,7 +3479,7 @@ public class Paint {
+      * @return true if the typeface has a glyph for the string
+      */
+     public boolean hasGlyph(String string) {
+-        return nHasGlyph(mNativePaint, mBidiFlags, string);
++        return nHasGlyph(getNativeTextInstance(), mBidiFlags, string);
+     }
+ 
+     /**
+@@ -3508,7 +3532,7 @@ public class Paint {
+             return 0.0f;
+         }
+         // TODO: take mCompatScaling into account (or eliminate compat scaling)?
+-        return nGetRunAdvance(mNativePaint, text, start, end, contextStart, contextEnd, isRtl,
++        return nGetRunAdvance(getNativeTextInstance(), text, start, end, contextStart, contextEnd, isRtl,
+                 offset);
+     }
+ 
+@@ -3634,7 +3658,7 @@ public class Paint {
+             return 0.0f;
+         }
+ 
+-        return nGetRunCharacterAdvance(mNativePaint, text, start, end, contextStart, contextEnd,
++        return nGetRunCharacterAdvance(getNativeTextInstance(), text, start, end, contextStart, contextEnd,
+                 isRtl, offset, advances, advancesIndex, drawBounds, runInfo);
+     }
+ 
+@@ -3763,7 +3787,7 @@ public class Paint {
+             throw new IndexOutOfBoundsException();
+         }
+         // TODO: take mCompatScaling into account (or eliminate compat scaling)?
+-        return nGetOffsetForAdvance(mNativePaint, text, start, end, contextStart, contextEnd,
++        return nGetOffsetForAdvance(getNativeTextInstance(), text, start, end, contextStart, contextEnd,
+                 isRtl, advance);
+     }
+ 
+@@ -3805,7 +3829,7 @@ public class Paint {
+      * @return true if the other {@link Paint} has the same effect on text measurement.
+      */
+     public boolean equalsForTextMeasurement(@NonNull Paint other) {
+-        return nEqualsForTextMeasurement(mNativePaint, other.mNativePaint);
++        return nEqualsForTextMeasurement(getNativeTextInstance(), other.getNativeTextInstance());
+     }
+ 
+     // regular JNI
+diff --git a/graphics/java/android/graphics/Typeface.java b/graphics/java/android/graphics/Typeface.java
+index f2beed7..4fb85f9 100644
+--- a/graphics/java/android/graphics/Typeface.java
++++ b/graphics/java/android/graphics/Typeface.java
+@@ -178,7 +178,7 @@ public class Typeface {
+      */
+     @GuardedBy("SYSTEM_FONT_MAP_LOCK")
+     @UnsupportedAppUsage(trackingBug = 123769347)
+-    static final Map<String, Typeface> sSystemFontMap = new ArrayMap<>();
++    static volatile Map<String, Typeface> sSystemFontMap = new ArrayMap<>();
+ 
+     // DirectByteBuffer object to hold sSystemFontMap's backing memory mapping.
+     static ByteBuffer sSystemFontMapBuffer = null;
+@@ -264,6 +264,121 @@ public class Typeface {
+         }
+     }
+ 
++    @GuardedBy("SYSTEM_FONT_MAP_LOCK")
++    private static Map<String, Typeface> sFontModOriginalMap;
++    private static volatile int sFontModGeneration;
++
++    /** @hide */
++    public static int getFontModGeneration() { return sFontModGeneration; }
++
++    private static boolean isFontModFamily(String name) {
++        if (name == null) return false;
++        String n = name.toLowerCase(java.util.Locale.ROOT);
++        if (n.contains("mono") || n.contains("clock") || n.contains("emoji")
++                || n.contains("icon") || n.contains("math") || n.contains("condensed")) return false;
++        return n.equals("sans") || n.equals("system-ui") || n.startsWith("sans-serif")
++                || n.startsWith("google-sans") || n.startsWith("variable-")
++                || n.startsWith("roboto") || n.startsWith("source-sans");
++    }
++
++    private static Typeface fontModConcrete(Typeface face) {
++        while (face.mPendingTypeface != null) {
++            Typeface resolved = face.mPendingTypeface.get();
++            if (resolved == null) throw new IllegalStateException("System fonts not initialized");
++            face = resolved;
++        }
++        return face;
++    }
++
++    /**
++     * Apply a custom family in front of each original UI fallback. No SharedMemory remap:
++     * the original system map and every old native Typeface retain their normal lifetime.
++     * @hide
++     */
++    public static void setFontModFont(@Nullable FontFamily custom) {
++        synchronized (SYSTEM_FONT_MAP_LOCK) {
++            if (sFontModOriginalMap == null) {
++                if (custom == null) return;
++                sFontModOriginalMap = new ArrayMap<>();
++                for (Map.Entry<String, Typeface> entry : sSystemFontMap.entrySet()) {
++                    sFontModOriginalMap.put(entry.getKey(), fontModConcrete(entry.getValue()));
++                }
++            }
++            Map<String, Typeface> next = new ArrayMap<>();
++            next.putAll(sFontModOriginalMap);
++            if (custom != null) {
++                for (Map.Entry<String, Typeface> entry : sFontModOriginalMap.entrySet()) {
++                    if (!isFontModFamily(entry.getKey())) continue;
++                    Typeface fallback = entry.getValue();
++                    long ptr = nativeCreateFromArray(new long[] {custom.getNativePtr()},
++                            fallback.getNativeInstance(), fallback.getWeight(), fallback.isItalic() ? 1 : 0);
++                    next.put(entry.getKey(), new Typeface(ptr, entry.getKey()));
++                }
++            }
++            Typeface normal = next.get(DEFAULT_FAMILY);
++            if (normal == null) throw new IllegalStateException("Missing default font family");
++            Typeface bold = new Typeface(nativeCreateFromTypefaceWithExactStyle(
++                    normal.getNativeInstance(), 700, false), DEFAULT_FAMILY);
++            Typeface italic = new Typeface(nativeCreateFromTypefaceWithExactStyle(
++                    normal.getNativeInstance(), 400, true), DEFAULT_FAMILY);
++            Typeface boldItalic = new Typeface(nativeCreateFromTypefaceWithExactStyle(
++                    normal.getNativeInstance(), 700, true), DEFAULT_FAMILY);
++            // AtomicReference indirection is also used by the platform's lazy initialization.
++            if (SANS_SERIF.mPendingTypeface != null) SANS_SERIF.mPendingTypeface.set(normal);
++            if (DEFAULT != SANS_SERIF && DEFAULT.mPendingTypeface != null) DEFAULT.mPendingTypeface.set(normal);
++            if (DEFAULT_BOLD.mPendingTypeface != null) DEFAULT_BOLD.mPendingTypeface.set(bold);
++            // Preserve the platform's static-field identity contracts.
++            next.put("sans-serif", SANS_SERIF);
++            next.put("serif", SERIF);
++            next.put("monospace", MONOSPACE);
++            // Some Typeface readers intentionally avoid the lock. Publish a complete
++            // snapshot instead of clearing a map they may currently be reading.
++            sSystemFontMap = next;
++            synchronized (SANS_SERIF) { SANS_SERIF.mSupportedAxes = null; }
++            synchronized (DEFAULT_BOLD) { DEFAULT_BOLD.mSupportedAxes = null; }
++            setDefault(DEFAULT);
++            sDefaults = new Typeface[] {DEFAULT, DEFAULT_BOLD, italic, boldItalic};
++            registerGenericFamilyNative("sans-serif", normal);
++            if (next.containsKey("system-ui")) registerGenericFamilyNative("system-ui", next.get("system-ui"));
++            synchronized (sStyledCacheLock) { sStyledTypefaceCache.clear(); }
++            synchronized (sWeightCacheLock) { sWeightTypefaceCache.clear(); }
++            synchronized (sDynamicCacheLock) { sDynamicTypefaceCache.evictAll(); }
++            synchronized (sVariableCacheLock) { sVariableCache.evictAll(); }
++            sFontModGeneration++;
++        }
++    }
++
++    /**
++     * The unchanged PixelOS default for the font picker's preview.
++     *
++     * @hide
++     */
++    public static @NonNull Typeface getFontModDefaultTypeface() {
++        synchronized (SYSTEM_FONT_MAP_LOCK) {
++            Typeface original = sFontModOriginalMap == null ? fontModConcrete(DEFAULT)
++                    : sFontModOriginalMap.get(DEFAULT_FAMILY);
++            return new Typeface(nativeCreateFromTypeface(original.getNativeInstance(), NORMAL), null);
++        }
++    }
++
++    /**
++     * Resolve an existing system-family Typeface after a selection change.
++     *
++     * @hide
++     */
++    public static @Nullable Typeface resolveFontModTypeface(@Nullable Typeface face) {
++        synchronized (SYSTEM_FONT_MAP_LOCK) {
++            if (sFontModOriginalMap == null) return face;
++            if (face == null) return DEFAULT;
++            String family = face.getSystemFontFamilyName();
++            if (face == DEFAULT_BOLD) family = DEFAULT_FAMILY;
++            if (!isFontModFamily(family)) return face;
++            Typeface current = sSystemFontMap.get(family);
++            if (current == null) return face;
++            return create(current, face.getWeight(), face.isItalic());
++        }
++    }
++
+     /** @hide */
+     @IntDef(value = {NORMAL, BOLD, ITALIC, BOLD_ITALIC})
+     @Retention(RetentionPolicy.SOURCE)
+diff --git a/services/core/java/com/android/server/graphics/fonts/FontManagerService.java b/services/core/java/com/android/server/graphics/fonts/FontManagerService.java
+index 14821cf..574c5fd 100644
+--- a/services/core/java/com/android/server/graphics/fonts/FontManagerService.java
++++ b/services/core/java/com/android/server/graphics/fonts/FontManagerService.java
+@@ -72,6 +72,87 @@ public final class FontManagerService extends IFontManager.Stub {
+     private static final String FONT_FILES_DIR = "/data/fonts/files";
+     private static final String CONFIG_XML_FILE = "/data/fonts/config/config.xml";
+ 
++    private final FontModStore mFontModStore;
++    private final Object mFontModCallbackLock = new Object();
++    private final android.util.SparseArray<com.android.internal.graphics.fonts.IFontModCallback>
++            mFontModProcessCallbacks = new android.util.SparseArray<>();
++    private final android.os.Handler mFontModHandler = new android.os.Handler(android.os.Looper.getMainLooper());
++    private final android.os.RemoteCallbackList<com.android.internal.graphics.fonts.IFontModCallback>
++            mFontModCallbacks = new android.os.RemoteCallbackList<>() {
++        @Override
++        public void onCallbackDied(com.android.internal.graphics.fonts.IFontModCallback callback,
++                Object cookie) {
++            synchronized (mFontModCallbackLock) {
++                int pid = (Integer) cookie;
++                if (mFontModProcessCallbacks.get(pid) == callback) mFontModProcessCallbacks.remove(pid);
++            }
++        }
++    };
++
++    @Override
++    public String getFontModState() { return mFontModStore.state(); }
++
++    @Override
++    public String registerFontModCallback(
++            com.android.internal.graphics.fonts.IFontModCallback callback) {
++        Objects.requireNonNull(callback);
++        final int pid = android.os.Binder.getCallingPid();
++        synchronized (mFontModCallbackLock) {
++            var previous = mFontModProcessCallbacks.get(pid);
++            if (previous != null) mFontModCallbacks.unregister(previous);
++            if (mFontModCallbacks.register(callback, pid)) mFontModProcessCallbacks.put(pid, callback);
++            else mFontModProcessCallbacks.remove(pid);
++            return mFontModStore.state();
++        }
++    }
++
++    private void enforceFontModOwner() {
++        mContext.enforceCallingOrSelfPermission(Manifest.permission.UPDATE_FONTS,
++                "UPDATE_FONTS permission required");
++        if (android.os.UserHandle.getCallingUserId() != android.os.UserHandle.USER_SYSTEM) {
++            throw new SecurityException("Only the device owner user may change the system font");
++        }
++    }
++
++    @Override
++    public String installFontModFont(ParcelFileDescriptor fd, String expectedSha256,
++            long expectedGeneration) {
++        try (ParcelFileDescriptor owned = Objects.requireNonNull(fd)) {
++            enforceFontModOwner();
++            String state = mFontModStore.install(owned, expectedSha256, expectedGeneration);
++            dispatchFontModState(state);
++            return state;
++        } catch (IOException e) {
++            throw new android.os.ServiceSpecificException(1, e.getMessage());
++        }
++    }
++
++    @Override
++    public String clearFontModFont(long expectedGeneration) {
++        enforceFontModOwner();
++        try {
++            String state = mFontModStore.clear(expectedGeneration);
++            dispatchFontModState(state);
++            return state;
++        } catch (IOException e) {
++            throw new android.os.ServiceSpecificException(1, e.getMessage());
++        }
++    }
++
++    private void dispatchFontModState(String state) {
++        // Never invoke another process while holding store/registration locks.
++        mFontModHandler.post(() -> {
++            int count = mFontModCallbacks.beginBroadcast();
++            try {
++                for (int i = 0; i < count; i++) {
++                    try { mFontModCallbacks.getBroadcastItem(i).onFontModChanged(state); }
++                    catch (android.os.RemoteException ignored) { }
++                }
++            } finally { mFontModCallbacks.finishBroadcast(); }
++        });
++    }
++
++
+     @android.annotation.EnforcePermission(android.Manifest.permission.UPDATE_FONTS)
+     @RequiresPermission(Manifest.permission.UPDATE_FONTS)
+     @Override
+@@ -193,6 +274,10 @@ public final class FontManagerService extends IFontManager.Stub {
+                 // Wait for FontManagerService to start since it will be needed after this point.
+                 mServiceStarted.join();
+             }
++            if (phase == SystemService.PHASE_SYSTEM_SERVICES_READY) {
++                mServiceStarted.join();
++                android.graphics.FontModRuntime.initialize(getContext());
++            }
+         }
+     }
+ 
+@@ -264,6 +349,8 @@ public final class FontManagerService extends IFontManager.Stub {
+         }
+         mContext = context;
+         mIsSafeMode = safeMode;
++        mFontModStore = new FontModStore(new File("/data/fonts/fontmod"),
++                new File("/data/fonts/config/fontmod.json"), safeMode);
+ 
+         if (Flags.useOptimizedBoottimeFontLoading()) {
+             Slog.i(TAG, "Using optimized boot-time font loading.");
+diff --git a/services/core/java/com/android/server/graphics/fonts/FontModStore.java b/services/core/java/com/android/server/graphics/fonts/FontModStore.java
+new file mode 100644
+index 0000000..cfe9aaa
+--- /dev/null
++++ b/services/core/java/com/android/server/graphics/fonts/FontModStore.java
+@@ -0,0 +1,223 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ * SPDX-License-Identifier: Apache-2.0
++ */
++package com.android.server.graphics.fonts;
++
++import android.graphics.Bitmap;
++import android.graphics.Canvas;
++import android.graphics.Paint;
++import android.graphics.Typeface;
++import android.graphics.fonts.Font;
++import android.graphics.fonts.FontFamily;
++import android.os.ParcelFileDescriptor;
++import android.system.Os;
++import android.system.OsConstants;
++import android.util.AtomicFile;
++import android.util.Log;
++
++import org.json.JSONObject;
++
++import java.io.File;
++import java.io.FileDescriptor;
++import java.io.FileInputStream;
++import java.io.FileOutputStream;
++import java.io.IOException;
++import java.nio.ByteBuffer;
++import java.nio.charset.StandardCharsets;
++import java.security.MessageDigest;
++import java.util.Locale;
++import java.util.UUID;
++
++/** Custom-only store. Never changes the signed font updater or its fs-verity policy. */
++final class FontModStore {
++    static final long MAX_BYTES = 32L * 1024 * 1024;
++    static final long MAX_RETAINED_BYTES = 512L * 1024 * 1024;
++    private static final String TAG = "FontModStore";
++    private final File mDirectory;
++    private final AtomicFile mConfig;
++    private final boolean mSafeMode;
++    private String mId = "";
++    private String mStoredId = "";
++    private long mGeneration;
++
++    FontModStore(File directory, File config, boolean safeMode) {
++        mDirectory = directory;
++        mConfig = new AtomicFile(config);
++        mSafeMode = safeMode;
++        // init.rc owns directory creation, permissions, and labeling on production devices.
++        load();
++    }
++
++    synchronized String state() {
++        try {
++            return new JSONObject().put("version", 1).put("id", mId)
++                    .put("storedId", mStoredId)
++                    .put("path", mId.isEmpty() ? "" : fileFor(mId).getAbsolutePath())
++                    .put("generation", mGeneration).put("safeMode", mSafeMode).toString();
++        } catch (org.json.JSONException e) { throw new IllegalStateException(e); }
++    }
++
++    synchronized String install(ParcelFileDescriptor descriptor, String expectedSha256, long expectedGeneration)
++            throws IOException {
++        if (mSafeMode) throw new IOException("Custom fonts are disabled in safe mode");
++        checkGeneration(expectedGeneration);
++        if (!validId(expectedSha256)) throw new IOException("Invalid SHA-256 identifier");
++        if (!mDirectory.isDirectory()) throw new IOException("FontMod directory is unavailable");
++        File temporary = new File(mDirectory, "import-" + UUID.randomUUID() + ".tmp");
++        try {
++            if (mDirectory.getUsableSpace() < MAX_BYTES + 16L * 1024 * 1024) {
++                throw new IOException("Insufficient storage for font installation");
++            }
++            // Own the Binder copy/dup, not the caller's descriptor or its Java wrapper.
++            try (FileInputStream in = new ParcelFileDescriptor.AutoCloseInputStream(
++                        ParcelFileDescriptor.dup(descriptor.getFileDescriptor()));
++                 FileOutputStream out = new FileOutputStream(temporary)) {
++                byte[] buffer = new byte[65536]; long total = 0; int n;
++                while ((n = in.read(buffer)) != -1) {
++                    total += n;
++                    if (total > MAX_BYTES) throw new IOException("Font exceeds 32 MiB");
++                    out.write(buffer, 0, n);
++                }
++                out.getFD().sync();
++            }
++            String actual = sha256(temporary);
++            if (!actual.equals(expectedSha256)) throw new IOException("Font content changed");
++            validate(temporary, true);
++            File destination = fileFor(actual);
++            if (destination.exists()) {
++                if (!sha256(destination).equals(actual)) throw new IOException("Stored font is corrupt");
++            } else {
++                long retained = 0;
++                File[] existing = mDirectory.listFiles();
++                if (existing != null) for (File f : existing) retained += f.length();
++                if (retained > MAX_RETAINED_BYTES) {
++                    throw new IOException("Font session storage limit reached");
++                }
++                Os.chmod(temporary.getAbsolutePath(), 0444);
++                Os.rename(temporary.getAbsolutePath(), destination.getAbsolutePath());
++                syncDirectory();
++            }
++            commit(actual);
++            return state();
++        } catch (android.system.ErrnoException e) {
++            throw new IOException("Failed to store custom font", e);
++        } finally {
++            if (temporary.exists() && !temporary.delete()) Log.w(TAG, "Cannot remove import temporary");
++        }
++    }
++
++    synchronized String clear(long expectedGeneration) throws IOException {
++        checkGeneration(expectedGeneration);
++        commit("");
++        // Retain previous files: running processes may still map them.
++        return state();
++    }
++
++    private void checkGeneration(long expected) throws IOException {
++        if (expected != mGeneration) throw new IOException("Font selection changed; refresh and retry");
++    }
++
++    private void commit(String id) throws IOException {
++        long next = Math.addExact(mGeneration, 1);
++        FileOutputStream out = mConfig.startWrite();
++        try {
++            JSONObject config = new JSONObject().put("version", 1).put("id", id)
++                    .put("generation", next);
++            out.write(config.toString().getBytes(StandardCharsets.UTF_8));
++            mConfig.finishWrite(out);
++        } catch (Exception e) {
++            mConfig.failWrite(out);
++            throw new IOException("Failed to commit font selection", e);
++        }
++        // Publish memory only after durable configuration succeeds.
++        mId = id;
++        mStoredId = id;
++        mGeneration = next;
++    }
++
++    private void load() {
++        try (FileInputStream in = mConfig.openRead()) {
++            byte[] data = in.readNBytes(4097);
++            if (data.length > 4096) throw new IOException("Configuration too large");
++            JSONObject config = new JSONObject(new String(data, StandardCharsets.UTF_8));
++            if (config.getInt("version") != 1) throw new IOException("Unknown configuration version");
++            String id = config.getString("id");
++            long generation = config.getLong("generation");
++            if ((!id.isEmpty() && !validId(id)) || generation < 0) throw new IOException("Invalid font state");
++            if (!id.isEmpty() && !mSafeMode) {
++                File font = fileFor(id);
++                if (!sha256(font).equals(id)) throw new IOException("Font digest mismatch");
++                // FontManagerService is still initializing its baseline map here.
++                // Parse the file without resolving Typeface.DEFAULT or drawing text.
++                validate(font, false);
++            }
++            mStoredId = id;
++            mId = mSafeMode ? "" : id;
++            mGeneration = generation;
++        } catch (java.io.FileNotFoundException ignored) {
++            // First boot: PixelOS defaults remain untouched.
++        } catch (Exception e) {
++            Log.e(TAG, "Ignoring invalid custom font configuration", e);
++        }
++        // Safe mode reads only selection metadata, never font bytes. Keep its saved choice
++        // visible to the owner so explicit reset/deletion can clear it permanently.
++        if (mSafeMode) return;
++        // Called once during early system-server startup, before applications can map these files.
++        File[] files = mDirectory.listFiles();
++        if (files != null) for (File f : files) {
++            String name = f.getName();
++            boolean ownFile = name.matches("[a-f0-9]{64}\\.font")
++                    || name.matches("import-[a-f0-9-]{36}\\.tmp");
++            if (ownFile && !name.equals(mId + ".font") && !f.delete()) {
++                Log.w(TAG, "Cannot remove obsolete custom font");
++            }
++        }
++    }
++
++    private File fileFor(String id) { return new File(mDirectory, id + ".font"); }
++    private static boolean validId(String id) { return id != null && id.matches("[a-f0-9]{64}"); }
++
++    private static String sha256(File file) throws IOException {
++        if (!file.isFile() || file.length() < 12 || file.length() > MAX_BYTES) {
++            throw new IOException("Invalid font size");
++        }
++        try {
++            MessageDigest digest = MessageDigest.getInstance("SHA-256");
++            try (FileInputStream in = new FileInputStream(file)) {
++                byte[] buffer = new byte[65536]; int n;
++                while ((n = in.read(buffer)) != -1) digest.update(buffer, 0, n);
++            }
++            StringBuilder hash = new StringBuilder(64);
++            for (byte b : digest.digest()) hash.append(String.format(Locale.ROOT, "%02x", b & 255));
++            return hash.toString();
++        } catch (java.security.NoSuchAlgorithmException e) { throw new AssertionError(e); }
++    }
++
++    private static void validate(File file, boolean render) throws IOException {
++        try (FileInputStream in = new FileInputStream(file)) {
++            byte[] magicBytes = in.readNBytes(4);
++            if (magicBytes.length != 4) throw new IOException("Missing font header");
++            int magic = ByteBuffer.wrap(magicBytes).getInt();
++            if (magic != 0x00010000 && magic != 0x4f54544f) {
++                throw new IOException("Only single-face TTF/OTF fonts are supported");
++            }
++        }
++        try {
++            Font font = new Font.Builder(file).build();
++            if (!render) return;
++            Typeface typeface = new Typeface.CustomFallbackBuilder(
++                    new FontFamily.Builder(font).build()).build();
++            Paint paint = new Paint(); paint.setTypeface(typeface); paint.setTextSize(24);
++            Bitmap bitmap = Bitmap.createBitmap(512, 80, Bitmap.Config.ALPHA_8);
++            try { new Canvas(bitmap).drawText("가나다 Aa 0123", 0, 40, paint); }
++            finally { bitmap.recycle(); }
++        } catch (RuntimeException e) { throw new IOException("Invalid font data", e); }
++    }
++
++    private void syncDirectory() throws android.system.ErrnoException {
++        FileDescriptor fd = Os.open(mDirectory.getAbsolutePath(),
++                OsConstants.O_RDONLY | OsConstants.O_CLOEXEC, 0);
++        try { Os.fsync(fd); } finally { Os.close(fd); }
++    }
++}
+-- 
+2.56.0
+

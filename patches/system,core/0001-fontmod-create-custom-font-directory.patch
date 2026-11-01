@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FontMod <fontmod@localhost>
+Date: Sun, 1 Nov 2026 18:30:00 +0900
+Subject: [PATCH] init: create the FontMod custom font directory
+
+Base: a5313eaec0219b021aaa5e59cc10dd07cfa8504c
+Custom font writes remain restricted to UPDATE_FONTS and the owner user.
+The signed font updater and its fs-verity validation remain unchanged.
+
+---
+ 1 files changed, 1 insertions(+), 0 deletions(-)
+
+diff --git a/rootdir/init.rc b/rootdir/init.rc
+--- a/rootdir/init.rc
++++ b/rootdir/init.rc
+@@ -909,6 +909,7 @@
+     mkdir /data/fonts/ 0771 root root encryption=Require
+     mkdir /data/fonts/files 0771 system system
+     mkdir /data/fonts/config 0770 system system
++    mkdir /data/fonts/fontmod 0771 system system
+ 
+     # Create directories to push tests to for each linker namespace.
+     # Create the subdirectories in case the first test is run as root
+-- 
+2.43.0
