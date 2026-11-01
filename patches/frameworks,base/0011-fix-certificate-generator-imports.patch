@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: PixelOS PIF <pif@localhost>
+Date: Mon, 2 Nov 2026 10:00:00 +0900
+Subject: [PATCH] key attestation: fix certificate generator compilation
+
+Import the BouncyCastle ASN.1 and Extension types used by the generator.
+Return the encoded application ID sequence as byte[] to match the extension
+builder, which adds the OCTET STRING wrapper itself. This fixes both the
+Turbine header failure and the subsequent javac type mismatch.
+
+---
+diff --git a/core/java/android/security/trickystore/CertificateGenerator.java b/core/java/android/security/trickystore/CertificateGenerator.java
+--- a/core/java/android/security/trickystore/CertificateGenerator.java
++++ b/core/java/android/security/trickystore/CertificateGenerator.java
+@@ -23,9 +23,14 @@
+ import android.content.pm.Signature;
+ import android.util.Log;
+
++import com.android.internal.org.bouncycastle.asn1.ASN1Encodable;
++import com.android.internal.org.bouncycastle.asn1.ASN1Integer;
+ import com.android.internal.org.bouncycastle.asn1.ASN1ObjectIdentifier;
+ import com.android.internal.org.bouncycastle.asn1.DEROctetString;
++import com.android.internal.org.bouncycastle.asn1.DERSequence;
++import com.android.internal.org.bouncycastle.asn1.DERSet;
+ import com.android.internal.org.bouncycastle.asn1.x500.X500Name;
++import com.android.internal.org.bouncycastle.asn1.x509.Extension;
+ import com.android.internal.org.bouncycastle.asn1.x509.KeyUsage;
+
+ import java.math.BigInteger;
+@@ -270,7 +275,7 @@
+         return bits;
+     }
+
+-    private static ASN1OctetString createApplicationId(int uid, String[] knownPackages)
++    private static byte[] createApplicationId(int uid, String[] knownPackages)
+             throws Throwable {
+         Context context = ActivityThread.currentApplication();
+         if (context == null && ActivityThread.currentActivityThread() != null) {
+@@ -323,7 +328,7 @@
+         applicationIdAA[0] = new DERSet(packageInfoAA);
+         applicationIdAA[1] = new DERSet(signaturesAA);
+
+-        return new DEROctetString(new DERSequence(applicationIdAA).getEncoded());
++        return new DERSequence(applicationIdAA).getEncoded();
+     }
+
+     private static final class Digest {

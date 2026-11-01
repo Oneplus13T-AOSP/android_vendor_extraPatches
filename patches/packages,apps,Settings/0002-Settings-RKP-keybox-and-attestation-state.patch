@@ -1,0 +1,309 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: PixelOS PIF <pif@localhost>
+Date: Sun, 1 Nov 2026 23:32:00 +0900
+Subject: [PATCH] Settings: accept RKP keyboxes and report attestation state
+
+The keybox importer required both an ECDSA and an RSA block. RKP keyboxes that
+reach a STRONG verdict carry only one algorithm, because the framework uses
+whichever signing key is present for both leaf algorithms, so the importer
+rejected exactly the keyboxes that work.
+
+It also required NumberOfKeyboxes to be a positive integer, while the framework
+parser treats it as advisory and only logs a mismatch. The importer must not be
+stricter than the code that consumes the file.
+
+Also:
+
+  - Read the registration state back from Settings.Secure in the summary, so a
+    keybox that looks configured but is absent from the setting is visible.
+    Missing registration was the most common misdiagnosis in the reference
+    write-up, and the UI showed the static summary either way.
+  - Restart GMS and Play Store after installing or deleting a keybox, since both
+    cache attestation material for the life of the process.
+  - Accept lowercase "ec" as an algorithm name, which some generators emit.
+  - Add an attestation patch level entry (Settings.Secure.tricky_store_patch) so
+    the osPatchLevel / vendorPatchLevel / bootPatchLevel written into generated
+    attestations can follow a ROM whose OTA lags its security patch.
+
+Base: 9fdea4f2582
+---
+ 4 files changed, 172 insertions(+), 17 deletions(-)
+
+diff --git a/res/values/custom_strings.xml b/res/values/custom_strings.xml
+index c94c9aec850..a335464b95a 100644
+--- a/res/values/custom_strings.xml
++++ b/res/values/custom_strings.xml
+@@ -358,11 +358,21 @@
+     <!-- Keybox Data -->
+     <string name="keybox_data_title">Configure keybox XML</string>
+     <string name="keybox_data_summary">Configure system-wide key attestation spoofing. Tap Delete to reset to defaults.</string>
++    <string name="keybox_data_state_missing">No keybox registered. Attestation is not being re-signed.</string>
++    <string name="keybox_data_state_loaded">Registered: %1$d bytes, %2$d certificate(s). Tap to replace, Delete to remove.</string>
+ 
+     <!-- Pif Data -->
+     <string name="pif_data_title">Configure PIF JSON</string>
+     <string name="pif_data_summary">Configure PIF JSON used to spoof properties for GMS and the Play Store. Tap Delete to revert to dynamic defaults.</string>
+ 
++    <!-- Attestation patch levels -->
++    <string name="patch_level_title">Attestation patch level</string>
++    <string name="patch_level_state_default">Using the build security patch level.</string>
++    <string name="patch_level_state_custom">Custom: %1$s</string>
++    <string name="patch_level_hint">all=2026-09-05\nor system=, vendor=, boot= per line</string>
++    <string name="patch_level_cleared">Patch level reset to the build default</string>
++    <string name="patch_level_saved">Patch level saved</string>
++
+     <!-- Spoofing toggle -->
+     <string name="cert_overlay_title">Spoof certified properties</string>
+     <string name="cert_overlay_summary">Spoof PI certified properties to GMS\nRequires a reboot to apply</string>
+diff --git a/res/xml/development_settings.xml b/res/xml/development_settings.xml
+index 02ce4ce9541..bc9b92a1f89 100644
+--- a/res/xml/development_settings.xml
++++ b/res/xml/development_settings.xml
+@@ -668,6 +668,11 @@
+             android:summary="@string/pif_data_summary"
+             android:defaultValue=""/>
+ 
++        <com.android.settings.development.PatchLevelPreference
++            android:key="patch_level_setting"
++            android:title="@string/patch_level_title"
++            android:defaultValue=""/>
++
+     </PreferenceCategory>
+ 
+     <PreferenceCategory
+diff --git a/src/com/android/settings/development/KeyboxDataPreference.java b/src/com/android/settings/development/KeyboxDataPreference.java
+index 5cba2108b52..d4657dc15b6 100644
+--- a/src/com/android/settings/development/KeyboxDataPreference.java
++++ b/src/com/android/settings/development/KeyboxDataPreference.java
+@@ -48,7 +48,7 @@ public class KeyboxDataPreference extends Preference {
+         ImageButton deleteButton = (ImageButton) holder.findViewById(R.id.delete_button);
+ 
+         title.setText(getTitle());
+-        summary.setText(getSummary());
++        summary.setText(describeState());
+ 
+         holder.itemView.setOnClickListener(v -> {
+             if (mFilePickerLauncher != null) {
+@@ -64,9 +64,39 @@ public class KeyboxDataPreference extends Preference {
+                     Settings.Secure.KEYBOX_DATA, null);
+             Toast.makeText(getContext(), "XML data cleared", Toast.LENGTH_SHORT).show();
+             callChangeListener(null);
++            notifyChanged();
++            killPackages();
+         });
+     }
+ 
++    /**
++     * Reports the registration state, not just the configured summary. The single
++     * biggest source of misdiagnosed Play Integrity failures is a keybox that looks
++     * configured in the UI but is absent from Settings.Secure, so the state is read
++     * back from the same value the framework consumes.
++     */
++    private CharSequence describeState() {
++        String xml = Settings.Secure.getString(getContext().getContentResolver(),
++                Settings.Secure.KEYBOX_DATA);
++        if (xml == null || xml.trim().isEmpty()) {
++            return getContext().getString(R.string.keybox_data_state_missing);
++        }
++        int certs = 0;
++        try {
++            XmlPullParser parser = XmlPullParserFactory.newInstance().newPullParser();
++            parser.setInput(new StringReader(xml));
++            for (int eventType = parser.next(); eventType != XmlPullParser.END_DOCUMENT;
++                    eventType = parser.next()) {
++                if (eventType == XmlPullParser.START_TAG
++                        && "Certificate".equals(parser.getName())) {
++                    certs++;
++                }
++            }
++        } catch (Exception ignored) {
++        }
++        return getContext().getString(R.string.keybox_data_state_loaded, xml.length(), certs);
++    }
++
+     public void handleFileSelected(Uri uri) {
+         if (uri == null ||
+             (!uri.toString().endsWith(".xml") &&
+@@ -94,6 +124,7 @@ public class KeyboxDataPreference extends Preference {
+                     Settings.Secure.KEYBOX_DATA, xml);
+             Toast.makeText(getContext(), "XML file loaded", Toast.LENGTH_SHORT).show();
+             callChangeListener(xml);
++            killPackages();
+ 
+         } catch (IOException e) {
+             Log.e(TAG, "Failed to read XML file", e);
+@@ -101,11 +132,36 @@ public class KeyboxDataPreference extends Preference {
+         }
+     }
+ 
++    /**
++     * Restarts GMS and Play Store so the newly installed keybox is picked up. The
++     * framework caches the parsed keybox and only refreshes it periodically, and GMS
++     * caches the certificates it already fetched for its attestation keys, so a stale
++     * process keeps reporting the previous verdict until it is restarted.
++     */
++    private void killPackages() {
++        try {
++            android.app.ActivityManager am = (android.app.ActivityManager)
++                    getContext().getSystemService(Context.ACTIVITY_SERVICE);
++            if (am == null) return;
++            for (String pkg : new String[] {
++                    "com.google.android.gms", "com.android.vending" }) {
++                am.getClass().getMethod("forceStopPackage", String.class).invoke(am, pkg);
++            }
++        } catch (Exception e) {
++            Log.e(TAG, "Failed to restart GMS / Play Store", e);
++        }
++    }
++
++    /**
++     * Accepts any complete keybox document, including the RKP form that only carries a
++     * single (ECDSA) key. The framework's KeyBoxManager uses whichever key is present
++     * to sign both leaf algorithms, so requiring both an ECDSA and an RSA block here
++     * would reject exactly the keyboxes that produce a STRONG verdict.
++     */
+     private boolean validateXml(String xml) {
+         boolean hasEcdsaKey = false, hasRsaKey = false;
+         boolean hasEcdsaPrivKey = false, hasRsaPrivKey = false;
+         int ecdsaCertCount = 0, rsaCertCount = 0;
+-        int numberOfKeyboxes = -1;
+ 
+         try {
+             XmlPullParser parser = XmlPullParserFactory.newInstance().newPullParser();
+@@ -117,22 +173,14 @@ public class KeyboxDataPreference extends Preference {
+                 if (eventType == XmlPullParser.START_TAG) {
+                     String name = parser.getName();
+                     switch (name) {
+-                        case "NumberOfKeyboxes":
+-                            parser.next(); // move to TEXT event
+-                            if (parser.getEventType() == XmlPullParser.TEXT) {
+-                                try {
+-                                    numberOfKeyboxes = Integer.parseInt(parser.getText().trim());
+-                                } catch (NumberFormatException e) {
+-                                    numberOfKeyboxes = -1;
+-                                }
+-                            }
+-                            break;
+-
+                         case "Key":
+                             currentAlg = parser.getAttributeValue(null, "algorithm");
+-                            if ("ecdsa".equalsIgnoreCase(currentAlg)) {
++                            if ("ecdsa".equalsIgnoreCase(currentAlg)
++                                    || "ec".equalsIgnoreCase(currentAlg)) {
++                                currentAlg = "ecdsa";
+                                 hasEcdsaKey = true;
+                             } else if ("rsa".equalsIgnoreCase(currentAlg)) {
++                                currentAlg = "rsa";
+                                 hasRsaKey = true;
+                             } else {
+                                 currentAlg = null; // unsupported key
+@@ -177,8 +225,13 @@ public class KeyboxDataPreference extends Preference {
+             return false;
+         }
+ 
+-        return numberOfKeyboxes == 1
+-                && hasEcdsaKey && hasEcdsaPrivKey && ecdsaCertCount >= 1
+-                && hasRsaKey && hasRsaPrivKey && rsaCertCount >= 1;
++        // NumberOfKeyboxes is advisory in the framework parser: generators disagree on
++        // what it counts (boxes or keys) and some write a value matching neither, so a
++        // mismatch there is only logged. The importer must not be stricter than the
++        // code that consumes the file, or a keybox that would work on the device is
++        // rejected here. A document with no usable key is still rejected.
++        boolean hasEcdsa = hasEcdsaKey && hasEcdsaPrivKey && ecdsaCertCount >= 1;
++        boolean hasRsa = hasRsaKey && hasRsaPrivKey && rsaCertCount >= 1;
++        return hasEcdsa || hasRsa;
+     }
+ }
+diff --git a/src/com/android/settings/development/PatchLevelPreference.java b/src/com/android/settings/development/PatchLevelPreference.java
+new file mode 100644
+index 00000000000..3ab068a3b56
+--- /dev/null
++++ b/src/com/android/settings/development/PatchLevelPreference.java
+@@ -0,0 +1,87 @@
++package com.android.settings.development;
++
++import android.content.Context;
++import android.provider.Settings;
++import android.text.TextUtils;
++import android.util.AttributeSet;
++import android.widget.ImageButton;
++import android.widget.TextView;
++import android.widget.Toast;
++
++import androidx.preference.Preference;
++import androidx.preference.PreferenceViewHolder;
++
++import com.android.settings.R;
++
++/**
++ * Edit the patch levels written into generated key attestations.
++ *
++ * <p>Play Integrity compares the attestation's osPatchLevel / vendorPatchLevel /
++ * bootPatchLevel with the security patch level the same process reports. A ROM whose
++ * OTA is older than its system security patch (or the reverse) therefore fails even
++ * with a valid keybox, so both have to be able to follow the same value.
++ *
++ * <p>The value is free text in {@code all=YYYY-MM-DD} form, or per field with
++ * {@code system=}, {@code vendor=} and {@code boot=} lines. Empty means "use the
++ * running build's security patch level", which is the correct default for a ROM
++ * whose OTA and system patch level agree.
++ */
++public class PatchLevelPreference extends Preference {
++
++    private static final String TAG = "PatchLevelPref";
++
++    public PatchLevelPreference(Context context, AttributeSet attrs) {
++        super(context, attrs);
++        setLayoutResource(R.layout.pref_with_delete);
++    }
++
++    @Override
++    public void onBindViewHolder(PreferenceViewHolder holder) {
++        super.onBindViewHolder(holder);
++
++        TextView title = (TextView) holder.findViewById(R.id.title);
++        TextView summary = (TextView) holder.findViewById(R.id.summary);
++        ImageButton deleteButton = (ImageButton) holder.findViewById(R.id.delete_button);
++
++        title.setText(getTitle());
++
++        String current = Settings.Secure.getString(getContext().getContentResolver(),
++                Settings.Secure.TRICKY_STORE_PATCH);
++        if (TextUtils.isEmpty(current)) {
++            summary.setText(R.string.patch_level_state_default);
++        } else {
++            summary.setText(getContext().getString(
++                    R.string.patch_level_state_custom, current.replace('\n', ' ')));
++        }
++
++        holder.itemView.setOnClickListener(v -> showEditor(current));
++        deleteButton.setOnClickListener(v -> {
++            Settings.Secure.putString(getContext().getContentResolver(),
++                    Settings.Secure.TRICKY_STORE_PATCH, null);
++            Toast.makeText(getContext(), R.string.patch_level_cleared, Toast.LENGTH_SHORT).show();
++            notifyChanged();
++        });
++    }
++
++    private void showEditor(String current) {
++        android.widget.EditText input = new android.widget.EditText(getContext());
++        input.setText(current == null ? "" : current);
++        input.setSingleLine(false);
++        input.setHint(R.string.patch_level_hint);
++
++        new android.app.AlertDialog.Builder(getContext())
++                .setTitle(R.string.patch_level_title)
++                .setView(input)
++                .setPositiveButton(android.R.string.ok, (dialog, which) -> {
++                    String value = input.getText().toString().trim();
++                    Settings.Secure.putString(getContext().getContentResolver(),
++                            Settings.Secure.TRICKY_STORE_PATCH,
++                            value.isEmpty() ? null : value);
++                    Toast.makeText(getContext(), R.string.patch_level_saved,
++                            Toast.LENGTH_SHORT).show();
++                    notifyChanged();
++                })
++                .setNegativeButton(android.R.string.cancel, null)
++                .show();
++    }
++}

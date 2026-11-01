@@ -1,0 +1,251 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: PixelOS PIF <pif@localhost>
+Date: Wed, 4 Nov 2026 14:00:00 +0900
+Subject: [PATCH] key attestation: remove manual patch-level overrides
+
+Use the existing Build.VERSION.SECURITY_PATCH defaults for attestation
+instead of a free-text Secure setting. Remove the configuration parser,
+refresh state, setting constant and validator. Old stored values no longer
+affect certificate generation after the developer preference is removed.
+
+---
+diff --git a/core/java/android/provider/Settings.java b/core/java/android/provider/Settings.java
+--- a/core/java/android/provider/Settings.java
++++ b/core/java/android/provider/Settings.java
+@@ -13987,16 +13987,6 @@
+         public static final String TRICKY_STORE_TARGET = "tricky_store_target";
+
+         /**
+-         * Optional patch levels used in generated attestations, in
+-         * {@code system=YYYY-MM-DD}, {@code vendor=...}, {@code boot=...} or
+-         * {@code all=...} form, one per line. An unset or empty value uses the
+-         * running build's security patch level.
+-         * @hide
+-         */
+-        @Readable
+-        public static final String TRICKY_STORE_PATCH = "tricky_store_patch";
+-
+-        /**
+          * Network traffic indicator mode
+          * 0 = Don't show network traffic indicator
+          * 1 = Display up-stream traffic only
+diff --git a/core/java/android/security/trickystore/AttestationUtils.java b/core/java/android/security/trickystore/AttestationUtils.java
+--- a/core/java/android/security/trickystore/AttestationUtils.java
++++ b/core/java/android/security/trickystore/AttestationUtils.java
+@@ -326,67 +326,16 @@
+     }
+
+     /**
+-     * Resolve the three patch levels from a single configuration snapshot.
++     * Use the process build patch level, including any PIF Build-field override.
++     * Legacy tricky_store_patch values are deliberately ignored.
+      * The result is [system (YYYYMM), vendor (YYYYMMDD), boot (YYYYMMDD)].
+      */
+     public static int[] getPatchLevels(String[] packages) {
+-        TrickyStoreService.CustomPatchLevel customLevel =
+-                TrickyStoreService.getInstance().getCustomPatchLevelForPackage(packages);
+         return new int[] {
+-                getPatchLevelFromConfig(customLevel, false),
+-                getVendorPatchLevelFromConfig(customLevel, true),
+-                getBootPatchLevelFromConfig(customLevel, true)
++                convertPatchLevel(Build.VERSION.SECURITY_PATCH, false),
++                convertPatchLevel(Build.VERSION.SECURITY_PATCH, true),
++                convertPatchLevel(Build.VERSION.SECURITY_PATCH, true)
+         };
+-    }
+-
+-    private static int getPatchLevelFromConfig(
+-            TrickyStoreService.CustomPatchLevel level, boolean isLong) {
+-        if (level != null && level.system != null) {
+-            Integer parsed = parsePatchLevel(level.system, isLong);
+-            if (parsed != null) return parsed;
+-        }
+-        return convertPatchLevel(Build.VERSION.SECURITY_PATCH, isLong);
+-    }
+-
+-    private static int getVendorPatchLevelFromConfig(
+-            TrickyStoreService.CustomPatchLevel level, boolean isLong) {
+-        if (level != null && level.vendor != null) {
+-            Integer parsed = parsePatchLevel(level.vendor, isLong);
+-            if (parsed != null) return parsed;
+-        }
+-        return convertPatchLevel(Build.VERSION.SECURITY_PATCH, isLong);
+-    }
+-
+-    private static int getBootPatchLevelFromConfig(
+-            TrickyStoreService.CustomPatchLevel level, boolean isLong) {
+-        if (level != null && level.boot != null) {
+-            Integer parsed = parsePatchLevel(level.boot, isLong);
+-            if (parsed != null) return parsed;
+-        }
+-        return convertPatchLevel(Build.VERSION.SECURITY_PATCH, isLong);
+-    }
+-
+-    private static Integer parsePatchLevel(String value, boolean isLong) {
+-        if (value == null || value.equalsIgnoreCase("no") || value.equalsIgnoreCase("prop")) {
+-            return null;
+-        }
+-
+-        String normalized = value.replace("-", "");
+-        try {
+-            if (normalized.length() == 8) {
+-                int year = Integer.parseInt(normalized.substring(0, 4));
+-                int month = Integer.parseInt(normalized.substring(4, 6));
+-                int day = Integer.parseInt(normalized.substring(6, 8));
+-                return isLong ? year * 10000 + month * 100 + day : year * 100 + month;
+-            } else if (normalized.length() == 6) {
+-                int year = Integer.parseInt(normalized.substring(0, 4));
+-                int month = Integer.parseInt(normalized.substring(4, 6));
+-                return isLong ? year * 10000 + month * 100 : year * 100 + month;
+-            }
+-        } catch (NumberFormatException e) {
+-            Log.e(TAG, "Failed to parse patch level: " + value, e);
+-        }
+-        return null;
+     }
+
+     public static int convertPatchLevel(String patchString, boolean isLong) {
+diff --git a/core/java/android/security/trickystore/TrickyStoreService.java b/core/java/android/security/trickystore/TrickyStoreService.java
+--- a/core/java/android/security/trickystore/TrickyStoreService.java
++++ b/core/java/android/security/trickystore/TrickyStoreService.java
+@@ -79,26 +79,10 @@
+     private volatile long mLastTargetsRefreshMs = 0L;
+     private volatile long mLastKeyboxRefreshMs = 0L;
+     private volatile String mLastKeyboxFingerprint = null;
+-    private volatile long mLastPatchRefreshMs = -1L;
+-    private volatile CustomPatchLevel mPatchConfig = null;
+
+     private final KeyBoxManager mKeyBoxManager;
+     private final Object mKeyboxRefreshLock = new Object();
+     private final Object mTargetsRefreshLock = new Object();
+-    private final Object mPatchRefreshLock = new Object();
+-
+-    /** @hide */
+-    public static class CustomPatchLevel {
+-        public final String system;
+-        public final String vendor;
+-        public final String boot;
+-
+-        public CustomPatchLevel(String system, String vendor, String boot) {
+-            this.system = system;
+-            this.vendor = vendor;
+-            this.boot = boot;
+-        }
+-    }
+
+     private TrickyStoreService() {
+         mKeyBoxManager = new KeyBoxManager();
+@@ -116,7 +100,6 @@
+         try {
+             refreshTargets();
+             refreshKeyBox();
+-            refreshPatchLevel();
+             Log.i(TAG, "TrickyStoreService initialized");
+         } catch (Exception e) {
+             Log.e(TAG, "Failed to initialize TrickyStore", e);
+@@ -220,73 +203,6 @@
+         }
+     }
+
+-    // ---------------------------------------------------------------- patch levels
+-
+-    public void refreshPatchLevel() {
+-        synchronized (mPatchRefreshLock) {
+-            mLastPatchRefreshMs = SystemClock.elapsedRealtime();
+-            refreshPatchLevelLocked();
+-        }
+-    }
+-
+-    private void refreshPatchLevelLocked() {
+-        String content;
+-        try {
+-            content = android.provider.Settings.Secure.getString(
+-                    resolver(),
+-                    android.provider.Settings.Secure.TRICKY_STORE_PATCH);
+-        } catch (Exception e) {
+-            Log.e(TAG, "Failed to read patch levels; keeping the current ones", e);
+-            return;
+-        }
+-        if (content == null || content.trim().isEmpty()) {
+-            mPatchConfig = null;
+-            return;
+-        }
+-        try {
+-            mPatchConfig = parsePatchText(content.trim());
+-        } catch (Exception e) {
+-            Log.e(TAG, "Invalid patch levels; retaining previous configuration", e);
+-        }
+-    }
+-
+-    private CustomPatchLevel parsePatchText(String content) {
+-        String system = null, vendor = null, boot = null, all = null;
+-        for (String raw : content.split("\n")) {
+-            String line = raw.trim();
+-            if (line.isEmpty() || line.startsWith("#")) continue;
+-            int idx = line.indexOf('=');
+-            if (idx > 0) {
+-                String key = line.substring(0, idx).trim().toLowerCase(java.util.Locale.US);
+-                String value = line.substring(idx + 1).trim();
+-                switch (key) {
+-                    case "system": system = value; break;
+-                    case "vendor": vendor = value; break;
+-                    case "boot":   boot   = value; break;
+-                    case "all":    all    = value; break;
+-                }
+-            } else {
+-                all = line;
+-            }
+-        }
+-        if (system == null && vendor == null && boot == null && all == null) return null;
+-        return new CustomPatchLevel(
+-                system != null ? system : all,
+-                vendor != null ? vendor : all,
+-                boot   != null ? boot   : all);
+-    }
+-
+-    public CustomPatchLevel getCustomPatchLevel() {
+-        maybeRefreshPatchLevel();
+-        return mPatchConfig;
+-    }
+-
+-    public CustomPatchLevel getCustomPatchLevelForPackage(String[] packages) {
+-        // Patch levels are global in this build; per-package overrides are not exposed
+-        // in the Settings screen yet.
+-        return getCustomPatchLevel();
+-    }
+-
+     // ---------------------------------------------------------------- policy
+
+     public boolean hasKeyboxes() {
+@@ -377,20 +293,6 @@
+         }
+     }
+
+-    private void maybeRefreshPatchLevel() {
+-        long now = SystemClock.elapsedRealtime();
+-        if (mLastPatchRefreshMs >= 0L
+-                && now - mLastPatchRefreshMs < CONFIG_REFRESH_COOLDOWN_MS) return;
+-        synchronized (mPatchRefreshLock) {
+-            now = SystemClock.elapsedRealtime();
+-            if (mLastPatchRefreshMs < 0L
+-                    || now - mLastPatchRefreshMs >= CONFIG_REFRESH_COOLDOWN_MS) {
+-                mLastPatchRefreshMs = now;
+-                refreshPatchLevelLocked();
+-            }
+-        }
+-    }
+-
+     private void maybeRefreshKeyBox() {
+         long now = SystemClock.elapsedRealtime();
+         if (mLastKeyboxRefreshMs != 0L
+diff --git a/packages/SettingsProvider/src/android/provider/settings/validators/SecureSettingsValidators.java b/packages/SettingsProvider/src/android/provider/settings/validators/SecureSettingsValidators.java
+--- a/packages/SettingsProvider/src/android/provider/settings/validators/SecureSettingsValidators.java
++++ b/packages/SettingsProvider/src/android/provider/settings/validators/SecureSettingsValidators.java
+@@ -558,7 +558,6 @@
+         VALIDATORS.put(Secure.PIF_DATA, ANY_STRING_VALIDATOR);
+         VALIDATORS.put(Secure.FETCHED_PIF, ANY_STRING_VALIDATOR);
+         VALIDATORS.put(Secure.TRICKY_STORE_TARGET, ANY_STRING_VALIDATOR);
+-        VALIDATORS.put(Secure.TRICKY_STORE_PATCH, ANY_STRING_VALIDATOR);
+         VALIDATORS.put(Secure.DOZE_FOR_NOTIFICATIONS, BOOLEAN_VALIDATOR);
+         VALIDATORS.put(Secure.DOZE_TAP_GESTURE_AMBIENT, BOOLEAN_VALIDATOR);
+         VALIDATORS.put(Secure.DOZE_PICK_UP_GESTURE_AMBIENT, BOOLEAN_VALIDATOR);

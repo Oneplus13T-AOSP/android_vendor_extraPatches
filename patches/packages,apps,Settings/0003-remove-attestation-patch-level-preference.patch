@@ -1,0 +1,135 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: PixelOS PIF <pif@localhost>
+Date: Wed, 4 Nov 2026 14:00:00 +0900
+Subject: [PATCH] Settings: remove the manual attestation patch-level entry
+
+Remove the developer entry, editor implementation and unused strings.
+The framework follow-up removes the backing override and uses its build
+patch-level defaults, so no hidden legacy override remains active.
+
+---
+diff --git a/res/values/custom_strings.xml b/res/values/custom_strings.xml
+--- a/res/values/custom_strings.xml
++++ b/res/values/custom_strings.xml
+@@ -365,14 +365,6 @@
+     <string name="pif_data_title">Configure PIF JSON</string>
+     <string name="pif_data_summary">Configure PIF JSON used to spoof properties for GMS and the Play Store. Tap Delete to revert to dynamic defaults.</string>
+
+-    <!-- Attestation patch levels -->
+-    <string name="patch_level_title">Attestation patch level</string>
+-    <string name="patch_level_state_default">Using the build security patch level.</string>
+-    <string name="patch_level_state_custom">Custom: %1$s</string>
+-    <string name="patch_level_hint">all=2026-09-05\nor system=, vendor=, boot= per line</string>
+-    <string name="patch_level_cleared">Patch level reset to the build default</string>
+-    <string name="patch_level_saved">Patch level saved</string>
+-
+     <!-- Spoofing toggle -->
+     <string name="cert_overlay_title">Spoof certified properties</string>
+     <string name="cert_overlay_summary">Spoof PI certified properties to GMS\nRequires a reboot to apply</string>
+diff --git a/res/xml/development_settings.xml b/res/xml/development_settings.xml
+--- a/res/xml/development_settings.xml
++++ b/res/xml/development_settings.xml
+@@ -668,11 +668,6 @@
+             android:summary="@string/pif_data_summary"
+             android:defaultValue=""/>
+
+-        <com.android.settings.development.PatchLevelPreference
+-            android:key="patch_level_setting"
+-            android:title="@string/patch_level_title"
+-            android:defaultValue=""/>
+-
+     </PreferenceCategory>
+
+     <PreferenceCategory
+diff --git a/src/com/android/settings/development/PatchLevelPreference.java b/src/com/android/settings/development/PatchLevelPreference.java
+deleted file mode 100644
+--- a/src/com/android/settings/development/PatchLevelPreference.java
++++ /dev/null
+@@ -1,87 +0,0 @@
+-package com.android.settings.development;
+-
+-import android.content.Context;
+-import android.provider.Settings;
+-import android.text.TextUtils;
+-import android.util.AttributeSet;
+-import android.widget.ImageButton;
+-import android.widget.TextView;
+-import android.widget.Toast;
+-
+-import androidx.preference.Preference;
+-import androidx.preference.PreferenceViewHolder;
+-
+-import com.android.settings.R;
+-
+-/**
+- * Edit the patch levels written into generated key attestations.
+- *
+- * <p>Play Integrity compares the attestation's osPatchLevel / vendorPatchLevel /
+- * bootPatchLevel with the security patch level the same process reports. A ROM whose
+- * OTA is older than its system security patch (or the reverse) therefore fails even
+- * with a valid keybox, so both have to be able to follow the same value.
+- *
+- * <p>The value is free text in {@code all=YYYY-MM-DD} form, or per field with
+- * {@code system=}, {@code vendor=} and {@code boot=} lines. Empty means "use the
+- * running build's security patch level", which is the correct default for a ROM
+- * whose OTA and system patch level agree.
+- */
+-public class PatchLevelPreference extends Preference {
+-
+-    private static final String TAG = "PatchLevelPref";
+-
+-    public PatchLevelPreference(Context context, AttributeSet attrs) {
+-        super(context, attrs);
+-        setLayoutResource(R.layout.pref_with_delete);
+-    }
+-
+-    @Override
+-    public void onBindViewHolder(PreferenceViewHolder holder) {
+-        super.onBindViewHolder(holder);
+-
+-        TextView title = (TextView) holder.findViewById(R.id.title);
+-        TextView summary = (TextView) holder.findViewById(R.id.summary);
+-        ImageButton deleteButton = (ImageButton) holder.findViewById(R.id.delete_button);
+-
+-        title.setText(getTitle());
+-
+-        String current = Settings.Secure.getString(getContext().getContentResolver(),
+-                Settings.Secure.TRICKY_STORE_PATCH);
+-        if (TextUtils.isEmpty(current)) {
+-            summary.setText(R.string.patch_level_state_default);
+-        } else {
+-            summary.setText(getContext().getString(
+-                    R.string.patch_level_state_custom, current.replace('\n', ' ')));
+-        }
+-
+-        holder.itemView.setOnClickListener(v -> showEditor(current));
+-        deleteButton.setOnClickListener(v -> {
+-            Settings.Secure.putString(getContext().getContentResolver(),
+-                    Settings.Secure.TRICKY_STORE_PATCH, null);
+-            Toast.makeText(getContext(), R.string.patch_level_cleared, Toast.LENGTH_SHORT).show();
+-            notifyChanged();
+-        });
+-    }
+-
+-    private void showEditor(String current) {
+-        android.widget.EditText input = new android.widget.EditText(getContext());
+-        input.setText(current == null ? "" : current);
+-        input.setSingleLine(false);
+-        input.setHint(R.string.patch_level_hint);
+-
+-        new android.app.AlertDialog.Builder(getContext())
+-                .setTitle(R.string.patch_level_title)
+-                .setView(input)
+-                .setPositiveButton(android.R.string.ok, (dialog, which) -> {
+-                    String value = input.getText().toString().trim();
+-                    Settings.Secure.putString(getContext().getContentResolver(),
+-                            Settings.Secure.TRICKY_STORE_PATCH,
+-                            value.isEmpty() ? null : value);
+-                    Toast.makeText(getContext(), R.string.patch_level_saved,
+-                            Toast.LENGTH_SHORT).show();
+-                    notifyChanged();
+-                })
+-                .setNegativeButton(android.R.string.cancel, null)
+-                .show();
+-    }
+-}

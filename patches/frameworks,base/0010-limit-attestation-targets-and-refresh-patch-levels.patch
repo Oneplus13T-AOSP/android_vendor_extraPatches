@@ -1,0 +1,128 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: PixelOS PIF <pif@localhost>
+Date: Mon, 2 Nov 2026 10:00:00 +0900
+Subject: [PATCH] key attestation: limit defaults and refresh patch levels
+
+Keep the default policy scoped to GMS and Play Store as documented. The
+inherited target list also rewrote system and third-party attestations and
+forced software key generation for a financial application.
+
+Refresh patch-level settings on reads with the same five-second window as
+keybox data, preserving the previous snapshot on provider errors. Settings
+updates otherwise remain invisible until the requesting process restarts.
+Use elapsed time for target refreshes so wall-clock adjustments cannot stall
+policy updates.
+
+---
+diff --git a/core/java/android/security/trickystore/TrickyStoreService.java b/core/java/android/security/trickystore/TrickyStoreService.java
+--- a/core/java/android/security/trickystore/TrickyStoreService.java
++++ b/core/java/android/security/trickystore/TrickyStoreService.java
+@@ -51,28 +51,12 @@
+     }
+
+     /**
+-     * Packages whose attestations are rewritten by default. This mirrors the upstream
+-     * TrickyStore target list closely enough that Play Integrity works out of the box,
+-     * while leaving every unrelated application with its genuine hardware attestation.
++     * Default to the two PIF packages. Other callers retain their native keys and
++     * attestations unless the user explicitly configures a target policy.
+      */
+     public static final String DEFAULT_TARGET_LIST = String.join("\n",
+-            "android",
+             "com.android.vending",
+-            "com.google.android.gsf",
+-            "com.google.android.gms",
+-            "com.google.android.contactkeys",
+-            "com.google.android.ims",
+-            "com.google.android.safetycore",
+-            "com.google.android.apps.walletnfcrel",
+-            "com.google.android.apps.nbu.paisa.user",
+-            "com.revolut.revolut!",
+-            "io.github.qwq233.keyattestation?",
+-            "io.github.vvb2060.keyattestation?",
+-            "io.github.vvb2060.mahoshojo?",
+-            "com.reveny.nativecheck?",
+-            "com.zhenxi.hunter?",
+-            "luna.safe.luna?",
+-            "com.rem01gaming.disclosure?"
++            "com.google.android.gms"
+     );
+
+     // Attesting through an injected process cannot produce a STRONG verdict, so those
+@@ -95,11 +79,13 @@
+     private volatile long mLastTargetsRefreshMs = 0L;
+     private volatile long mLastKeyboxRefreshMs = 0L;
+     private volatile String mLastKeyboxFingerprint = null;
++    private volatile long mLastPatchRefreshMs = -1L;
+     private volatile CustomPatchLevel mPatchConfig = null;
+
+     private final KeyBoxManager mKeyBoxManager;
+     private final Object mKeyboxRefreshLock = new Object();
+     private final Object mTargetsRefreshLock = new Object();
++    private final Object mPatchRefreshLock = new Object();
+
+     /** @hide */
+     public static class CustomPatchLevel {
+@@ -237,6 +223,13 @@
+     // ---------------------------------------------------------------- patch levels
+
+     public void refreshPatchLevel() {
++        synchronized (mPatchRefreshLock) {
++            mLastPatchRefreshMs = SystemClock.elapsedRealtime();
++            refreshPatchLevelLocked();
++        }
++    }
++
++    private void refreshPatchLevelLocked() {
+         String content;
+         try {
+             content = android.provider.Settings.Secure.getString(
+@@ -284,13 +277,14 @@
+     }
+
+     public CustomPatchLevel getCustomPatchLevel() {
++        maybeRefreshPatchLevel();
+         return mPatchConfig;
+     }
+
+     public CustomPatchLevel getCustomPatchLevelForPackage(String[] packages) {
+         // Patch levels are global in this build; per-package overrides are not exposed
+         // in the Settings screen yet.
+-        return mPatchConfig;
++        return getCustomPatchLevel();
+     }
+
+     // ---------------------------------------------------------------- policy
+@@ -340,16 +334,30 @@
+     }
+
+     private void maybeRefreshTargets() {
+-        long now = System.currentTimeMillis();
++        long now = SystemClock.elapsedRealtime();
+         if (now - mLastTargetsRefreshMs < TARGETS_REFRESH_COOLDOWN_MS) return;
+         synchronized (mTargetsRefreshLock) {
+-            now = System.currentTimeMillis();
++            now = SystemClock.elapsedRealtime();
+             if (now - mLastTargetsRefreshMs < TARGETS_REFRESH_COOLDOWN_MS) return;
+             mLastTargetsRefreshMs = now;
+             refreshTargets();
+         }
+     }
+
++    private void maybeRefreshPatchLevel() {
++        long now = SystemClock.elapsedRealtime();
++        if (mLastPatchRefreshMs >= 0L
++                && now - mLastPatchRefreshMs < CONFIG_REFRESH_COOLDOWN_MS) return;
++        synchronized (mPatchRefreshLock) {
++            now = SystemClock.elapsedRealtime();
++            if (mLastPatchRefreshMs < 0L
++                    || now - mLastPatchRefreshMs >= CONFIG_REFRESH_COOLDOWN_MS) {
++                mLastPatchRefreshMs = now;
++                refreshPatchLevelLocked();
++            }
++        }
++    }
++
+     private void maybeRefreshKeyBox() {
+         long now = SystemClock.elapsedRealtime();
+         if (mLastKeyboxRefreshMs != 0L
