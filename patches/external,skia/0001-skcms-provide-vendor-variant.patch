@@ -1,0 +1,30 @@
+From 7e004e510e4b1cecb05412bffa5c2010fcc2debc Mon Sep 17 00:00:00 2001
+From: RobertGarciaa <chae0218@naver.com>
+Date: Mon, 2 Nov 2026 01:58:17 +0900
+Subject: [PATCH] skcms: provide the vendor variant required by libjxl
+
+Complete libjxl vendor support without removing it from libjxl or libdng_sdk.
+libskia_skcms has no further module dependencies to expose.
+
+Base: 508606366e71a3daa933a4e08bc49b84e387ec18
+
+Validation: source and dependency inspection only; no build run.
+---
+ Android.bp | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/Android.bp b/Android.bp
+index ff23e96..026bb79 100644
+--- a/Android.bp
++++ b/Android.bp
+@@ -1158,6 +1158,7 @@ gensrcs {
+ cc_library_static {
+     name: "libskia_skcms",
+     host_supported: true,
++    vendor_available: true,
+     sdk_version: "current",
+     srcs: [
+         "modules/skcms/skcms.cc",
+-- 
+2.56.0
+

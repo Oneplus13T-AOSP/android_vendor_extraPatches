@@ -1,0 +1,43 @@
+From bb24243d817afe15cc75726de72d433ae9dea77f Mon Sep 17 00:00:00 2001
+From: RobertGarciaa <chae0218@naver.com>
+Date: Tue, 3 Nov 2026 16:24:20 +0900
+Subject: [PATCH] soong: avoid panics collecting incomplete Ninja metrics
+
+Dumpvar mode does not generate Ninja outputs. An existing main Ninja file
+with missing shards can still reach disk usage collection and panic after
+a successful command, causing lunch to report a missing product.
+
+Skip optional disk usage metrics if any expected output cannot be statted,
+matching the existing handling of a missing main Ninja file. Do not publish
+a partial total. Actual build graph errors remain handled by the build.
+
+Base: dcd4a426ab8d562635058b98f5bb016f860ff143
+
+Validation: source, formatting and isolated patch application checks only.
+No lunch, Soong analysis, module build or full ROM build was executed.
+---
+ cmd/soong_ui/main.go | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/cmd/soong_ui/main.go b/cmd/soong_ui/main.go
+index b7efbaa..bdd1792 100644
+--- a/cmd/soong_ui/main.go
++++ b/cmd/soong_ui/main.go
+@@ -280,10 +280,11 @@ func writeBuildDiskUsageMetrics(m *metrics.Metrics, config build.Config) {
+ 	for _, file := range ninjaFiles {
+ 		fileInfo, err := os.Stat(file)
+ 		if err != nil {
+-			panic(fmt.Errorf("Could not open %s due to %s\n", file, err))
+-		} else {
+-			ninjaFileSize += fileInfo.Size()
++			// Dumpvar mode and interrupted builds can leave only some Ninja outputs.
++			// Disk usage metrics are optional; do not fail the command or report a partial sum.
++			return
+ 		}
++		ninjaFileSize += fileInfo.Size()
+ 	}
+ 	m.SetNinjaFileSize(&ninjaFileSize)
+ }
+-- 
+2.56.0
+
