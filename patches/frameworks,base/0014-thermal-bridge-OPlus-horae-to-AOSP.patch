@@ -1,0 +1,375 @@
+From a35344aedb4eb2e7efbbf9e6f583b01d58e7972d Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Wed, 4 Nov 2026 19:45:24 +0900
+Subject: [PATCH] thermal: bridge the OPlus horae Binder extension to AOSP
+
+---
+ .../power/thermal/OplusThermalService.java    |  85 +++++++++
+ .../power/thermal/ThermalManagerService.java  |  13 ++
+ .../thermal/OplusThermalServiceTest.java      | 163 ++++++++++++++++++
+ .../thermal/ThermalManagerServiceTest.java    |  42 +++++
+ 4 files changed, 303 insertions(+)
+ create mode 100644 services/core/java/com/android/server/power/thermal/OplusThermalService.java
+ create mode 100644 services/tests/servicestests/src/com/android/server/power/thermal/OplusThermalServiceTest.java
+
+diff --git a/services/core/java/com/android/server/power/thermal/OplusThermalService.java b/services/core/java/com/android/server/power/thermal/OplusThermalService.java
+new file mode 100644
+index 0000000..89e9f5c
+--- /dev/null
++++ b/services/core/java/com/android/server/power/thermal/OplusThermalService.java
+@@ -0,0 +1,85 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.server.power.thermal;
++
++import android.os.Binder;
++import android.os.Parcel;
++import android.os.Process;
++import android.os.RemoteException;
++import android.os.Temperature;
++
++import com.android.internal.annotations.VisibleForTesting;
++
++import java.util.function.Consumer;
++import java.util.function.IntSupplier;
++
++/** Binder extension used by the OPlus horae surface-temperature estimator. */
++final class OplusThermalService extends Binder {
++    static final String DESCRIPTOR = "android.os.IOplusThermalService";
++    static final String SENSOR_NAME = "horae_skin";
++    private static final int UPDATE_SKIN_AIDL = FIRST_CALL_TRANSACTION;
++    private static final int UPDATE_SKIN_NATIVE = 10001;
++
++    private final Consumer<Temperature> mCallback;
++    private final IntSupplier mCallingUid;
++
++    OplusThermalService(Consumer<Temperature> callback) {
++        this(callback, Binder::getCallingUid);
++    }
++
++    @VisibleForTesting
++    OplusThermalService(Consumer<Temperature> callback, IntSupplier callingUid) {
++        attachInterface(null, DESCRIPTOR);
++        mCallback = callback;
++        mCallingUid = callingUid;
++    }
++
++    @Override
++    protected boolean onTransact(int code, Parcel data, Parcel reply, int flags)
++            throws RemoteException {
++        if (code != UPDATE_SKIN_AIDL && code != UPDATE_SKIN_NATIVE) {
++            return super.onTransact(code, data, reply, flags);
++        }
++        // horae runs as AID_SYSTEM. Do not expose thermal state injection to apps.
++        if (mCallingUid.getAsInt() != Process.SYSTEM_UID) {
++            throw new SecurityException("Only the system UID may report horae temperatures");
++        }
++        data.enforceInterface(DESCRIPTOR);
++        if (data.dataAvail() != 2 * Integer.BYTES) {
++            throw new IllegalArgumentException("Expected horae temperature and status");
++        }
++        final int temperature = data.readInt();
++        final int status = data.readInt();
++        data.enforceNoDataAvail();
++        updateSkinThermalStatus(temperature, status);
++        // The native client uses a synchronous transaction with an empty reply;
++        // the AIDL client uses the same payload in a one-way transaction.
++        return true;
++    }
++
++    @VisibleForTesting
++    void updateSkinThermalStatus(int temperature, int status) {
++        if (!Temperature.isValidStatus(status)) {
++            throw new IllegalArgumentException("Invalid horae thermal status: " + status);
++        }
++        // The stock Binder protocol uses integer degrees Celsius and Android's
++        // 0..6 severities, not the raw milli-Celsius / OEM policy-level values.
++        // Keep HAL skin sensors under their own names so a lower horae report
++        // cannot replace a more severe HAL report in the existing max reducer.
++        mCallback.accept(new Temperature(temperature, Temperature.TYPE_SKIN, SENSOR_NAME, status));
++    }
++}
+diff --git a/services/core/java/com/android/server/power/thermal/ThermalManagerService.java b/services/core/java/com/android/server/power/thermal/ThermalManagerService.java
+index 52b407a..00c05f5 100644
+--- a/services/core/java/com/android/server/power/thermal/ThermalManagerService.java
++++ b/services/core/java/com/android/server/power/thermal/ThermalManagerService.java
+@@ -64,6 +64,7 @@ import android.os.ServiceManager;
+ import android.os.ShellCallback;
+ import android.os.ShellCommand;
+ import android.os.SystemClock;
++import android.os.SystemProperties;
+ import android.os.Temperature;
+ import android.os.Trace;
+ import android.util.ArrayMap;
+@@ -233,6 +234,12 @@ public class ThermalManagerService extends SystemService {
+ 
+     @VisibleForTesting
+     ThermalManagerService(Context context, @Nullable ThermalHalWrapper halWrapper) {
++        this(context, halWrapper, SystemProperties.getBoolean("persist.sys.horae.enable", false));
++    }
++
++    @VisibleForTesting
++    ThermalManagerService(Context context, @Nullable ThermalHalWrapper halWrapper,
++            boolean enableOplusThermalService) {
+         super(context);
+         mContext = context;
+         mHalWrapper = halWrapper;
+@@ -243,6 +250,11 @@ public class ThermalManagerService extends SystemService {
+         mTemperatureWatcher = new TemperatureWatcher();
+         mCurrentHeadRoomListenerCount.set(0);
+         mMaxHeadroomListenerCount.set(0);
++        if (enableOplusThermalService) {
++            // Attach before publishing the Binder. Reuse the HAL callback's
++            // identity clearing, event dispatch and maximum skin severity logic.
++            mService.setExtension(new OplusThermalService(mWrapperCallback::onTemperatureChanged));
++        }
+     }
+ 
+     @Override
+@@ -983,6 +995,7 @@ public class ThermalManagerService extends SystemService {
+         try {
+             synchronized (mLock) {
+                 pw.println("IsStatusOverride: " + mIsStatusOverride);
++                pw.println("Oplus thermal extension: " + (mService.getExtension() != null));
+                 pw.println("ThermalEventListeners:");
+                 mThermalEventListeners.dump(pw, "\t");
+                 pw.println("ThermalStatusListeners:");
+diff --git a/services/tests/servicestests/src/com/android/server/power/thermal/OplusThermalServiceTest.java b/services/tests/servicestests/src/com/android/server/power/thermal/OplusThermalServiceTest.java
+new file mode 100644
+index 0000000..d835a44
+--- /dev/null
++++ b/services/tests/servicestests/src/com/android/server/power/thermal/OplusThermalServiceTest.java
+@@ -0,0 +1,163 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.server.power.thermal;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertNotNull;
++import static org.junit.Assert.assertNull;
++import static org.junit.Assert.assertThrows;
++import static org.junit.Assert.assertTrue;
++
++import android.os.IBinder;
++import android.os.Parcel;
++import android.os.Process;
++import android.os.Temperature;
++
++import org.junit.Test;
++
++import java.util.concurrent.atomic.AtomicReference;
++
++public class OplusThermalServiceTest {
++    private final AtomicReference<Temperature> mReport = new AtomicReference<>();
++
++    private OplusThermalService service(int uid) {
++        return new OplusThermalService(mReport::set, () -> uid);
++    }
++
++    private Parcel request(String descriptor, int... args) {
++        Parcel parcel = Parcel.obtain();
++        parcel.writeInterfaceToken(descriptor);
++        for (int arg : args) {
++            parcel.writeInt(arg);
++        }
++        parcel.setDataPosition(0);
++        return parcel;
++    }
++
++    @Test
++    public void nativeSynchronousTransaction() throws Exception {
++        Parcel data = request(OplusThermalService.DESCRIPTOR, 42, Temperature.THROTTLING_MODERATE);
++        Parcel reply = Parcel.obtain();
++        try {
++            assertTrue(service(Process.SYSTEM_UID).onTransact(10001, data, reply, 0));
++            Temperature report = mReport.get();
++            assertNotNull(report);
++            assertEquals(42f, report.getValue(), 0f);
++            assertEquals(Temperature.TYPE_SKIN, report.getType());
++            assertEquals("horae_skin", report.getName());
++            assertEquals(Temperature.THROTTLING_MODERATE, report.getStatus());
++            assertEquals(0, reply.dataSize());
++        } finally {
++            data.recycle();
++            reply.recycle();
++        }
++    }
++
++    @Test
++    public void aidlOneWayTransaction() throws Exception {
++        Parcel data = request(OplusThermalService.DESCRIPTOR, 35, Temperature.THROTTLING_NONE);
++        try {
++            assertTrue(service(Process.SYSTEM_UID).onTransact(1, data, null, IBinder.FLAG_ONEWAY));
++            assertEquals(35f, mReport.get().getValue(), 0f);
++            assertEquals(Temperature.THROTTLING_NONE, mReport.get().getStatus());
++        } finally {
++            data.recycle();
++        }
++    }
++
++    @Test
++    public void nonSystemCallersAreRejected() {
++        for (int uid : new int[]{0, Process.SHELL_UID, 10042}) {
++            for (int code : new int[]{1, 10001}) {
++                Parcel data = request(OplusThermalService.DESCRIPTOR, 40, 2);
++                try {
++                    assertThrows(SecurityException.class,
++                            () -> service(uid).onTransact(code, data, null, IBinder.FLAG_ONEWAY));
++                    assertNull(mReport.get());
++                } finally {
++                    data.recycle();
++                }
++            }
++        }
++    }
++
++    @Test
++    public void wrongInterfaceTokenIsRejected() {
++        Parcel data = request("android.os.IThermalService", 40, 2);
++        try {
++            assertThrows(SecurityException.class,
++                    () -> service(Process.SYSTEM_UID).onTransact(10001, data, null, 0));
++            assertNull(mReport.get());
++        } finally {
++            data.recycle();
++        }
++    }
++
++    @Test
++    public void truncatedAndOversizedPayloadsAreRejected() {
++        for (int[] args : new int[][]{{}, {40}, {40, 2, 99}}) {
++            Parcel data = request(OplusThermalService.DESCRIPTOR, args);
++            try {
++                assertThrows(IllegalArgumentException.class,
++                        () -> service(Process.SYSTEM_UID).onTransact(10001, data, null, 0));
++                assertNull(mReport.get());
++            } finally {
++                data.recycle();
++            }
++        }
++    }
++
++    @Test
++    public void invalidSeverityIsRejected() {
++        for (int status : new int[]{-1, 7, 19, Integer.MAX_VALUE}) {
++            Parcel data = request(OplusThermalService.DESCRIPTOR, 40, status);
++            try {
++                assertThrows(IllegalArgumentException.class,
++                        () -> service(Process.SYSTEM_UID).onTransact(10001, data, null, 0));
++                assertNull(mReport.get());
++            } finally {
++                data.recycle();
++            }
++        }
++    }
++
++    @Test
++    public void allAndroidSeveritiesArePreserved() {
++        for (int status = Temperature.THROTTLING_NONE;
++                status <= Temperature.THROTTLING_SHUTDOWN; status++) {
++            service(Process.SYSTEM_UID).updateSkinThermalStatus(45, status);
++            assertEquals(status, mReport.get().getStatus());
++        }
++    }
++
++    @Test
++    public void descriptorAndUnknownTransactions() throws Exception {
++        OplusThermalService extension = service(Process.SYSTEM_UID);
++        Parcel data = Parcel.obtain();
++        Parcel reply = Parcel.obtain();
++        try {
++            assertTrue(extension.onTransact(IBinder.INTERFACE_TRANSACTION, data, reply, 0));
++            reply.setDataPosition(0);
++            assertEquals(OplusThermalService.DESCRIPTOR, reply.readString());
++            assertFalse(extension.onTransact(12345, data, null, 0));
++        } finally {
++            data.recycle();
++            reply.recycle();
++        }
++    }
++}
+diff --git a/services/tests/servicestests/src/com/android/server/power/thermal/ThermalManagerServiceTest.java b/services/tests/servicestests/src/com/android/server/power/thermal/ThermalManagerServiceTest.java
+index 1c81baf..978c1e2 100644
+--- a/services/tests/servicestests/src/com/android/server/power/thermal/ThermalManagerServiceTest.java
++++ b/services/tests/servicestests/src/com/android/server/power/thermal/ThermalManagerServiceTest.java
+@@ -302,6 +302,48 @@ public class ThermalManagerServiceTest {
+         doReturn(mock(IBinder.class)).when(mHeadroomListener).asBinder();
+     }
+ 
++    @Test
++    public void testOplusExtensionOptIn() {
++        ThermalManagerService disabled = new ThermalManagerService(mContext, mFakeHal, false);
++        assertEquals(null, disabled.mService.getExtension());
++        ThermalManagerService enabled = new ThermalManagerService(mContext, mFakeHal, true);
++        assertTrue(enabled.mService.getExtension() instanceof OplusThermalService);
++    }
++
++    @Test
++    public void testOplusTemperaturePreservesHigherHalStatus() throws RemoteException {
++        mService = new ThermalManagerService(mContext, mFakeHal, true);
++        mService.onBootPhase(SystemService.PHASE_ACTIVITY_MANAGER_READY);
++        OplusThermalService extension = (OplusThermalService) mService.mService.getExtension();
++
++        mFakeHal.mCallback.onTemperatureChanged(new Temperature(49, Temperature.TYPE_SKIN,
++                "skin1", Temperature.THROTTLING_SEVERE));
++        extension.updateSkinThermalStatus(37, Temperature.THROTTLING_LIGHT);
++        assertEquals(Temperature.THROTTLING_SEVERE,
++                mService.mService.getCurrentThermalStatus());
++
++        extension.updateSkinThermalStatus(35, Temperature.THROTTLING_NONE);
++        assertEquals(Temperature.THROTTLING_SEVERE,
++                mService.mService.getCurrentThermalStatus());
++        mFakeHal.mCallback.onTemperatureChanged(new Temperature(34, Temperature.TYPE_SKIN,
++                "skin1", Temperature.THROTTLING_NONE));
++        assertEquals(Temperature.THROTTLING_NONE, mService.mService.getCurrentThermalStatus());
++    }
++
++    @Test
++    public void testOplusTemperatureRaisesStatusAndHalUpdatesCannotClearIt() throws RemoteException {
++        mService = new ThermalManagerService(mContext, mFakeHal, true);
++        mService.onBootPhase(SystemService.PHASE_ACTIVITY_MANAGER_READY);
++        OplusThermalService extension = (OplusThermalService) mService.mService.getExtension();
++        extension.updateSkinThermalStatus(45, Temperature.THROTTLING_MODERATE);
++        mFakeHal.mCallback.onTemperatureChanged(new Temperature(35, Temperature.TYPE_SKIN,
++                "skin1", Temperature.THROTTLING_NONE));
++        assertEquals(Temperature.THROTTLING_MODERATE,
++                mService.mService.getCurrentThermalStatus());
++        extension.updateSkinThermalStatus(33, Temperature.THROTTLING_NONE);
++        assertEquals(Temperature.THROTTLING_NONE, mService.mService.getCurrentThermalStatus());
++    }
++
+     @Test
+     public void testRegister() throws Exception {
+         mService = new ThermalManagerService(mContext, mFakeHal);
+-- 
+2.56.0
+
