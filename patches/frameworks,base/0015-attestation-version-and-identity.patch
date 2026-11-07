@@ -1,0 +1,707 @@
+From aa04297c59d48602da74901c09c8b0412939fb6c Mon Sep 17 00:00:00 2001
+From: PixelOS PIF <pif@localhost>
+Date: Sat, 7 Nov 2026 16:14:06 +0900
+Subject: [PATCH] key attestation: assert the hardware's KeyMint version and
+ never sign a mismatched identity
+
+Two independent reasons a software certificate failed DEVICE, both visible in the
+2026-11-06 on-device log.
+
+**The asserted version described the ROM, not the hardware.**
+getAttestVersion() mapped the running SDK, so a PixelOS 17 build on KeyMint V3
+hardware claimed attestationVersion=400 while the vendor HAL reports V3 (300) and
+the spoofed Pixel 6a profile launched at API 32 (100). Verifiers cross-check the
+claimed version against the attested key, so all three disagreeing is itself the
+mismatch. Derive it from ro.product.first_api_level instead, the bootloader value
+that PIF does not rewrite: this device reports 35 and therefore asserts 300, which
+is also what the vendor HAL supports. On this hardware Evolution X's HAL probe and
+its first-API fallback both land on 300, so the probe is not needed and is omitted;
+it is blocked by SELinux inside an app process anyway.
+
+The provider lookup delegated to the boot property can therefore be dropped rather
+than duplicated in a second place.
+
+**A missing profile silently became the handset identity.**
+identityBytes() fell back to the process Build when the profile had no entry, so a
+process whose Build was not spoofed produced a certificate claiming
+OnePlus/PKX110 next to a Pixel fingerprint. That is exactly the contradiction this
+code exists to remove. Return null instead, require BRAND/DEVICE/PRODUCT to agree
+with the Build before treating the profile as live, and have callers keep the
+untouched hardware path when no identity is available. The Keystore2 recovery
+boundary already returned null on that condition, which preserves the original
+error instead of installing a contradictory certificate.
+
+The version mapping moved to AttestationVersion so the numbers this ROM asserts are
+covered by host checks with real API levels rather than asserted through a stub.
+
+Also from the same Evolution X generation:
+  - build every spoofed key through the software path, including the leaf-rewrite
+    case, because a generateKey reply that differs from the later getKeyEntry reply
+    is itself a probe signal; the key is still imported, so storage stays
+    hardware-backed and both reads agree;
+  - keep a numeric Build.VERSION.RELEASE when the fingerprint says CANARY;
+  - treat an all-zero boot key or hash as absent instead of signing it into
+    RootOfTrust;
+  - issue a random leaf serial per key, since a fixed serial is a fingerprint.
+
+Normal-path diagnostic lines added for the 11-06 investigation are removed again;
+a warning remains where the hardware path loses, and the asserted version is logged
+once per process.
+
+Change-Id: If96029568cf2b7d6a17a82753db232ac3e869b47
+---
+ .../security/pif/PlayIntegrityProfile.java    | 53 ++++++----
+ .../trickystore/AttestationLeafRewriter.java  | 12 ++-
+ .../trickystore/AttestationUtils.java         | 99 +++++++++++++------
+ .../trickystore/AttestationVersion.java       | 57 +++++++++++
+ .../trickystore/CertificateGenerator.java     | 20 +++-
+ .../trickystore/KeyboxGenerationFallback.java | 20 ++--
+ .../internal/util/PropImitationHooks.java     | 18 +++-
+ .../AndroidKeyStoreKeyPairGeneratorSpi.java   | 96 ++++++------------
+ 8 files changed, 251 insertions(+), 124 deletions(-)
+ create mode 100644 core/java/android/security/trickystore/AttestationVersion.java
+
+diff --git a/core/java/android/security/pif/PlayIntegrityProfile.java b/core/java/android/security/pif/PlayIntegrityProfile.java
+index 0d6d9bd548fd..433136aef7ae 100644
+--- a/core/java/android/security/pif/PlayIntegrityProfile.java
++++ b/core/java/android/security/pif/PlayIntegrityProfile.java
+@@ -107,9 +107,12 @@ public final class PlayIntegrityProfile {
+     }
+ 
+     /**
+-     * Whether the process Build already carries this profile. Without this check the
+-     * certificate could claim a Pixel identity while the Build reports the handset's
+-     * own, which is the mismatch that fails device integrity.
++     * Whether the process Build already carries this profile.
++     *
++     * <p>A fingerprint match alone is not enough: the profile and the Build have to agree
++     * on the fields actually written into the attestation. When they do not, signing the
++     * profile would produce a certificate that contradicts the very process asking for it
++     * — the mismatch that fails device integrity.
+      */
+     private static boolean isProfileLive(Map<String, String> fields) {
+         String profileFp = fields.get("FINGERPRINT");
+@@ -118,7 +121,16 @@ public final class PlayIntegrityProfile {
+             // spoofed BRAND so a half-applied profile is not signed.
+             return !TextUtils.isEmpty(fields.get("BRAND"));
+         }
+-        return profileFp.equals(Build.FINGERPRINT);
++        return profileFp.equals(Build.FINGERPRINT)
++                && matches(fields, "BRAND", Build.BRAND)
++                && matches(fields, "DEVICE", Build.DEVICE)
++                && matches(fields, "PRODUCT", Build.PRODUCT);
++    }
++
++    /** A profile field matches the process Build; absent fields do not object. */
++    private static boolean matches(Map<String, String> fields, String key, String actual) {
++        String expected = fields.get(key);
++        return TextUtils.isEmpty(expected) || expected.equals(actual);
+     }
+ 
+     /**
+@@ -217,24 +229,31 @@ public final class PlayIntegrityProfile {
+     }
+ 
+     /**
+-     * Identity bytes for the attestation certificate, falling back to the process
+-     * Build fields (which the PIF hook has already replaced for a spoofed caller)
+-     * when no explicit profile is available.
++     * Identity bytes for the attestation certificate, or null when the profile does not
++     * supply this field.
++     *
++     * <p>Deliberately does not fall back to the process Build. That fallback turned a
++     * missing profile into a certificate asserting the handset's real identity next to a
++     * spoofed Build, which reads as a contradiction. Callers treat null as "no profile"
++     * and keep the untouched hardware path instead.
+      */
+     public static byte[] identityBytes(Map<String, String> identity, String field) {
+         String value = identity != null ? identity.get(field) : null;
+-        if (TextUtils.isEmpty(value)) value = buildField(field);
+-        return TextUtils.isEmpty(value) ? null : value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
++        return TextUtils.isEmpty(value)
++                ? null
++                : value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+     }
+ 
+-    private static String buildField(String field) {
+-        switch (field) {
+-            case "BRAND": return Build.BRAND;
+-            case "DEVICE": return Build.DEVICE;
+-            case "PRODUCT": return Build.PRODUCT;
+-            case "MANUFACTURER": return Build.MANUFACTURER;
+-            case "MODEL": return Build.MODEL;
+-            default: return null;
++    /** Public identity tags, for diagnostics only. Never includes identifiers. */
++    public static String describeIdentity(Map<String, String> identity) {
++        if (identity == null) return "none";
++        StringBuilder sb = new StringBuilder();
++        for (String field : IDENTITY_FIELDS) {
++            String value = identity.get(field);
++            if (TextUtils.isEmpty(value)) continue;
++            if (sb.length() > 0) sb.append(' ');
++            sb.append(field).append('=').append(value);
+         }
++        return sb.length() == 0 ? "none" : sb.toString();
+     }
+ }
+diff --git a/core/java/android/security/trickystore/AttestationLeafRewriter.java b/core/java/android/security/trickystore/AttestationLeafRewriter.java
+index de129e6f4a7b..05a4a08f910e 100644
+--- a/core/java/android/security/trickystore/AttestationLeafRewriter.java
++++ b/core/java/android/security/trickystore/AttestationLeafRewriter.java
+@@ -213,10 +213,10 @@ public final class AttestationLeafRewriter {
+     private static void addRootOfTrust(TreeMap<Integer, ASN1Encodable> ordered,
+             ASN1Encodable originalRootOfTrust, Inputs inputs) throws Exception {
+         byte[] bootKey = rootOfTrustOctet(originalRootOfTrust, 0);
+-        if (bootKey == null) bootKey = inputs.bootKey;
++        if (AttestationUtils.isNullOrZeroBootKey(bootKey)) bootKey = inputs.bootKey;
+ 
+         byte[] bootHash = rootOfTrustOctet(originalRootOfTrust, 3);
+-        if (bootHash == null) bootHash = inputs.bootHash;
++        if (AttestationUtils.isNullOrZeroBootHash(bootHash)) bootHash = inputs.bootHash;
+ 
+         // Older Keymaster versions encode RootOfTrust without verifiedBootHash.
+         // Keep the original layout instead of unconditionally adding a fourth field.
+@@ -224,10 +224,14 @@ public final class AttestationLeafRewriter {
+                 || ((ASN1Sequence) originalRootOfTrust).size() >= 4;
+ 
+         ASN1EncodableVector rot = new ASN1EncodableVector();
+-        rot.add(new DEROctetString(bootKey != null ? bootKey : new byte[32]));
++        rot.add(new DEROctetString(AttestationUtils.isNullOrZeroBootKey(bootKey)
++                ? new byte[32] : bootKey));
+         rot.add(ASN1Boolean.TRUE);
+         rot.add(new ASN1Enumerated(0));
+-        if (hasBootHash) rot.add(new DEROctetString(bootHash != null ? bootHash : new byte[32]));
++        if (hasBootHash) {
++            rot.add(new DEROctetString(AttestationUtils.isNullOrZeroBootHash(bootHash)
++                    ? new byte[32] : bootHash));
++        }
+         ordered.put(TAG_ROOT_OF_TRUST, new DERTaggedObject(TAG_ROOT_OF_TRUST,
+                 new DERSequence(rot)));
+ 
+diff --git a/core/java/android/security/trickystore/AttestationUtils.java b/core/java/android/security/trickystore/AttestationUtils.java
+index 8abd78b98b8d..06d4bcbf7f71 100644
+--- a/core/java/android/security/trickystore/AttestationUtils.java
++++ b/core/java/android/security/trickystore/AttestationUtils.java
+@@ -55,8 +55,17 @@ import java.security.cert.X509Certificate;
+ public final class AttestationUtils {
+     private static final String TAG = "AttestationUtils";
+ 
++    /**
++     * Bootloader-provided launch API level. Unlike {@code ro.build.version.sdk} this
++     * describes the hardware, not the ROM, and PIF does not rewrite it.
++     */
++    private static final String FIRST_API_PROPERTY = "ro.product.first_api_level";
++
+     private static volatile byte[] sBootKey;
+     private static volatile byte[] sBootHash;
++    // Logged once, so the version the ROM asserts can be checked without emitting a line
++    // on every key generation.
++    private static volatile boolean sVersionLogged;
+     private AttestationUtils() {}
+ 
+     /**
+@@ -68,15 +77,34 @@ public final class AttestationUtils {
+         if (!hasBootHashFromProp()) sBootHash = null;
+     }
+ 
++    /**
++     * Whether a boot key is absent or unusable.
++     *
++     * <p>An all-zero array is not a value: a TEE that cannot attest, or a probe that fails
++     * quietly, can hand one back, and signing it into RootOfTrust claims a verified-boot
++     * key of zero bytes.
++     */
++    public static boolean isNullOrZeroBootKey(byte[] key) {
++        if (key == null) return true;
++        for (byte value : key) {
++            if (value != 0) return false;
++        }
++        return true;
++    }
++
++    public static boolean isNullOrZeroBootHash(byte[] hash) {
++        return isNullOrZeroBootKey(hash);
++    }
++
+     public static byte[] getBootKey() {
+         byte[] key = sBootKey;
+-        if (key != null) return key;
++        if (!isNullOrZeroBootKey(key)) return key;
+         synchronized (AttestationUtils.class) {
+             key = sBootKey;
+-            if (key == null) {
++            if (isNullOrZeroBootKey(key)) {
+                 key = getBootKeyFromProp();
+-                if (key == null) key = deriveFromKeybox(false);
+-                if (key == null) key = generateRandomBytes(32);
++                if (isNullOrZeroBootKey(key)) key = deriveFromKeybox(false);
++                if (isNullOrZeroBootKey(key)) key = generateRandomBytes(32);
+                 sBootKey = key;
+             }
+         }
+@@ -85,13 +113,13 @@ public final class AttestationUtils {
+ 
+     public static byte[] getBootHash() {
+         byte[] hash = sBootHash;
+-        if (hash != null) return hash;
++        if (!isNullOrZeroBootHash(hash)) return hash;
+         synchronized (AttestationUtils.class) {
+             hash = sBootHash;
+-            if (hash == null) {
++            if (isNullOrZeroBootHash(hash)) {
+                 hash = getBootHashFromProp();
+-                if (hash == null) hash = deriveFromKeybox(true);
+-                if (hash == null) {
++                if (isNullOrZeroBootHash(hash)) hash = deriveFromKeybox(true);
++                if (isNullOrZeroBootHash(hash)) {
+                     Log.w(TAG, "No verified-boot hash available; using random bytes");
+                     hash = generateRandomBytes(32);
+                 }
+@@ -131,11 +159,11 @@ public final class AttestationUtils {
+     }
+ 
+     private static boolean hasBootKeyFromProp() {
+-        return getBootKeyFromProp() != null;
++        return !isNullOrZeroBootKey(getBootKeyFromProp());
+     }
+ 
+     private static boolean hasBootHashFromProp() {
+-        return getBootHashFromProp() != null;
++        return !isNullOrZeroBootHash(getBootHashFromProp());
+     }
+ 
+     /**
+@@ -146,7 +174,8 @@ public final class AttestationUtils {
+         String digest = SystemProperties.get("ro.boot.vbmeta.public_key_digest", null);
+         if (digest == null || digest.length() != 64) return null;
+         try {
+-            return hexStringToByteArray(digest);
++            byte[] key = hexStringToByteArray(digest);
++            return isNullOrZeroBootKey(key) ? null : key;
+         } catch (Exception e) {
+             Log.e(TAG, "Failed to parse vbmeta.public_key_digest", e);
+             return null;
+@@ -157,7 +186,8 @@ public final class AttestationUtils {
+         String digest = SystemProperties.get("ro.boot.vbmeta.digest", null);
+         if (digest == null || digest.length() != 64) return null;
+         try {
+-            return hexStringToByteArray(digest);
++            byte[] hash = hexStringToByteArray(digest);
++            return isNullOrZeroBootHash(hash) ? null : hash;
+         } catch (Exception e) {
+             Log.e(TAG, "Failed to parse vbmeta.digest", e);
+             return null;
+@@ -298,31 +328,38 @@ public final class AttestationUtils {
+     }
+ 
+     /**
+-     * KeyMint attestation version. This must not exceed what the running KeyMint
+-     * implementation reports, because verifiers cross-check it against the device's
+-     * attestation/keymaster version pair.
++     * KeyMint attestation version, derived from the API level the device was launched
++     * with rather than from the running SDK.
++     *
++     * <p>The running SDK describes the ROM, not the key material: a PixelOS 17 build on
++     * this hardware would claim KeyMint 500 while the vendor HAL only speaks V3, and a
++     * spoofed Pixel profile claims an even lower one. Verifiers cross-check the asserted
++     * version against the attested key, so guessing the ROM's version breaks DEVICE.
++     *
++     * <p>{@code ro.product.first_api_level} is the bootloader-provided launch level. PIF
++     * only rewrites {@code Build} fields, so this property keeps the real hardware value;
++     * that is what makes it usable here.
+      */
+     public static int getAttestVersion() {
+-        switch (Build.VERSION.SDK_INT) {
+-            case Build.VERSION_CODES.Q:
+-            case Build.VERSION_CODES.R:
+-                return 4;
+-            case Build.VERSION_CODES.S:
+-            case Build.VERSION_CODES.S_V2:
+-                return 100;
+-            case Build.VERSION_CODES.TIRAMISU:
+-                return 200;
+-            case Build.VERSION_CODES.UPSIDE_DOWN_CAKE:
+-            case Build.VERSION_CODES.VANILLA_ICE_CREAM:
+-                return 300;
+-            default:
+-                return 400;
++        int version = computeAttestVersion();
++        if (!sVersionLogged) {
++            sVersionLogged = true;
++            Log.i(TAG, "attestVersion=" + version
++                    + " keymaster=" + AttestationVersion.keymasterVersion(version)
++                    + " firstApi=" + SystemProperties.getInt(FIRST_API_PROPERTY, -1)
++                    + " sdk=" + Build.VERSION.SDK_INT);
+         }
++        return version;
++    }
++
++    private static int computeAttestVersion() {
++        final int firstApiLevel = SystemProperties.getInt(FIRST_API_PROPERTY, -1);
++        if (firstApiLevel > 0) return AttestationVersion.forApiLevel(firstApiLevel);
++        return AttestationVersion.forApiLevel(Build.VERSION.SDK_INT);
+     }
+ 
+     public static int getKeymasterVersion() {
+-        int attestVersion = getAttestVersion();
+-        return attestVersion == 4 ? 41 : attestVersion;
++        return AttestationVersion.keymasterVersion(getAttestVersion());
+     }
+ 
+     /**
+diff --git a/core/java/android/security/trickystore/AttestationVersion.java b/core/java/android/security/trickystore/AttestationVersion.java
+new file mode 100644
+index 000000000000..7f285f9e7e7c
+--- /dev/null
++++ b/core/java/android/security/trickystore/AttestationVersion.java
+@@ -0,0 +1,57 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ * SPDX-License-Identifier: Apache-2.0
++ */
++package android.security.trickystore;
++
++/**
++ * Maps an API level to the KeyMint / Keymaster attestation version that release shipped,
++ * and to the {@code osVersion} integer written into KeyDescription.
++ *
++ * <p>Free of Android dependencies so the mapping that decides what the ROM asserts can be
++ * exercised on the host. The values matter because verifiers cross-check the asserted
++ * version against the attested key: claiming a newer KeyMint than the hardware supports is
++ * itself a mismatch.
++ *
++ * @hide
++ */
++public final class AttestationVersion {
++    private AttestationVersion() {}
++
++    /**
++     * KeyMint attestation version for the given API level.
++     *
++     * <p>Follows Evolution X so both ROMs assert the same thing for the same hardware.
++     * API levels below 29 are not mapped explicitly: those devices cannot ship this ROM,
++     * and the trailing branch mirrors the reference behaviour.
++     */
++    public static int forApiLevel(int apiLevel) {
++        switch (apiLevel) {
++            case 29:
++            case 30:
++                return 4;
++            case 31:
++            case 32:
++                return 100;
++            case 33:
++                return 200;
++            case 34:
++            case 35:
++                return 300;
++            case 36:
++                return 400;
++            default:
++                return apiLevel >= 37 ? 500 : 400;
++        }
++    }
++
++    /** {@code keymasterVersion} as KeyMint reports it for a given attestation version. */
++    public static int keymasterVersion(int attestVersion) {
++        return attestVersion == 4 ? 41 : attestVersion;
++    }
++
++    /** KeyMint {@code osVersion} encoding, i.e. API 36 -> 160000. */
++    public static int osVersion(int apiLevel) {
++        return apiLevel * 10000;
++    }
++}
+diff --git a/core/java/android/security/trickystore/CertificateGenerator.java b/core/java/android/security/trickystore/CertificateGenerator.java
+index 6567c58a75a5..72b28b962ad3 100644
+--- a/core/java/android/security/trickystore/CertificateGenerator.java
++++ b/core/java/android/security/trickystore/CertificateGenerator.java
+@@ -38,6 +38,7 @@ import java.nio.charset.StandardCharsets;
+ import java.security.KeyPair;
+ import java.security.KeyPairGenerator;
+ import java.security.MessageDigest;
++import java.security.SecureRandom;
+ import java.security.cert.Certificate;
+ import java.security.cert.X509Certificate;
+ import java.security.spec.ECGenParameterSpec;
+@@ -194,7 +195,7 @@ public final class CertificateGenerator {
+             int uid) throws Exception {
+ 
+         BigInteger serial = params.certificateSerial != null ?
+-            params.certificateSerial : BigInteger.ONE;
++            params.certificateSerial : generateRandomSerial();
+         Date notBefore = params.certificateNotBefore != null
+                 ? params.certificateNotBefore : new Date();
+         Date notAfter = params.certificateNotAfter != null
+@@ -256,6 +257,23 @@ public final class CertificateGenerator {
+         }
+     }
+ 
++    /**
++     * Fresh random positive serial for a generated leaf.
++     *
++     * <p>KeyMint issues a random serial per key. A fixed serial shared by every attested
++     * key on every device is trivially recognisable as a software certificate, so mirror
++     * the hardware behaviour. 63 bits keeps it inside the X.509 positive range.
++     */
++    /** @hide visible for the host checks, which assert serials are random and positive. */
++    public static BigInteger generateRandomSerial() {
++        SecureRandom random = new SecureRandom();
++        byte[] bytes = new byte[8];
++        random.nextBytes(bytes);
++        bytes[0] &= 0x7f;
++        BigInteger serial = new BigInteger(1, bytes);
++        return serial.signum() == 0 ? BigInteger.ONE : serial.setBit(62);
++    }
++
+     /**
+      * Same purpose -> KeyUsage mapping stock KeyMint uses. keyCertSign is only
+      * correct for ATTEST_KEY; using it for every key is a fingerprint.
+diff --git a/core/java/android/security/trickystore/KeyboxGenerationFallback.java b/core/java/android/security/trickystore/KeyboxGenerationFallback.java
+index 95b2e54df871..9ea16cff8b8a 100644
+--- a/core/java/android/security/trickystore/KeyboxGenerationFallback.java
++++ b/core/java/android/security/trickystore/KeyboxGenerationFallback.java
+@@ -154,22 +154,30 @@ public final class KeyboxGenerationFallback {
+         KeyStore2 store = KeyStore2.getInstance();
+         try {
+             boolean eligible = eligible(level, descriptor, signer, args);
+-            Log.i(TAG, "Hardware failure: code=" + failure.getErrorCode()
+-                    + " uid=" + Process.myUid() + " level=" + level + " eligible=" + eligible);
+             if (!eligible) return null;
+             String[] packages = TrickyStoreService.resolveCallerPackages();
+             TrickyStoreService service = TrickyStoreService.getInstance();
+             boolean target = service.needSoftwareFallback(Process.myUid(), packages);
+             boolean keybox = target && service.hasKeyboxes();
+-            Log.i(TAG, "Policy: packages=" + (packages == null ? 0 : packages.length)
+-                    + " target=" + target + " keybox=" + keybox);
++            // -49 is the expected steady state on an unlocked device, so this is a
++            // warning worth keeping: it is the only record of why the hardware path lost.
++            Log.w(TAG, "Hardware attestation failed: code=" + failure.getErrorCode()
++                    + " uid=" + Process.myUid() + " eligible=true target=" + target
++                    + " keybox=" + keybox);
+             if (!keybox) return null;
+ 
+             CertificateGenerator.KeyGenParameters params = parameters(args);
+             params.packages = packages;
+-            Map<String, String> identity = PlayIntegrityProfile.isSpoofedPackage(packages)
+-                    ? PlayIntegrityProfile.getIdentity() : null;
+             if (PlayIntegrityProfile.isSpoofedPackage(packages)) {
++                Map<String, String> identity = PlayIntegrityProfile.getIdentity();
++                if (identity == null) {
++                    // No coherent identity to sign; let the caller report the original
++                    // hardware error rather than installing a contradictory certificate.
++                    Log.i(TAG, "No live Play Integrity profile; not installing a software key");
++                    return null;
++                }
++                Log.i(TAG, "Attested identity: "
++                        + PlayIntegrityProfile.describeIdentity(identity));
+                 params.brand = PlayIntegrityProfile.identityBytes(identity, "BRAND");
+                 params.device = PlayIntegrityProfile.identityBytes(identity, "DEVICE");
+                 params.product = PlayIntegrityProfile.identityBytes(identity, "PRODUCT");
+diff --git a/core/java/com/android/internal/util/PropImitationHooks.java b/core/java/com/android/internal/util/PropImitationHooks.java
+index 4c6e43eb5250..2e78a6dca4e0 100644
+--- a/core/java/com/android/internal/util/PropImitationHooks.java
++++ b/core/java/com/android/internal/util/PropImitationHooks.java
+@@ -323,10 +323,26 @@ public class PropImitationHooks {
+                 Log.e(TAG, "Invalid entry in certified props: " + entry);
+                 continue;
+             }
+-            setPropValue(fieldAndProp[0], fieldAndProp[1]);
++            String key = fieldAndProp[0];
++            String value = fieldAndProp[1];
++            if ("VERSION.RELEASE".equals(key)) {
++                value = numericRelease(value, fieldAndProp[1]);
++            }
++            setPropValue(key, value);
+         }
+     }
+ 
++    /**
++     * A Canary fingerprint carries the literal {@code CANARY} where the release goes, which
++     * no consumer can read as a version. Keep this ROM's own numeric release in that case
++     * and pass the profile value through otherwise.
++     */
++    private static String numericRelease(String value, String fallback) {
++        if (!"CANARY".equalsIgnoreCase(value)) return value;
++        String own = Build.VERSION.RELEASE;
++        return TextUtils.isEmpty(own) ? fallback : own;
++    }
++
+     private static String readFromFile(File file) {
+         StringBuilder content = new StringBuilder();
+ 
+diff --git a/keystore/java/android/security/keystore2/AndroidKeyStoreKeyPairGeneratorSpi.java b/keystore/java/android/security/keystore2/AndroidKeyStoreKeyPairGeneratorSpi.java
+index 9d2df9f0213e..afa6fe8bd724 100644
+--- a/keystore/java/android/security/keystore2/AndroidKeyStoreKeyPairGeneratorSpi.java
++++ b/keystore/java/android/security/keystore2/AndroidKeyStoreKeyPairGeneratorSpi.java
+@@ -21,7 +21,6 @@ import static android.security.keystore2.AndroidKeyStoreCipherSpiBase.DEFAULT_MG
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.annotation.RequiresPermission;
+-import android.app.ActivityThread;
+ import android.content.Context;
+ import android.hardware.security.keymint.EcCurve;
+ import android.hardware.security.keymint.KeyParameter;
+@@ -47,7 +46,6 @@ import android.security.keystore.SecureKeyImportUnavailableException;
+ import android.security.keystore.StrongBoxUnavailableException;
+ import android.security.pif.PlayIntegrityProfile;
+ import android.security.trickystore.CertificateGenerator;
+-import android.security.trickystore.CertificateHacker;
+ import android.security.trickystore.TrickyStoreService;
+ import android.system.keystore2.Authorization;
+ import android.system.keystore2.Domain;
+@@ -63,7 +61,6 @@ import android.util.Log;
+ 
+ import libcore.util.EmptyArray;
+ 
+-import java.io.ByteArrayInputStream;
+ import java.io.ByteArrayOutputStream;
+ import java.io.IOException;
+ import java.math.BigInteger;
+@@ -78,7 +75,6 @@ import java.security.SecureRandom;
+ import java.security.UnrecoverableKeyException;
+ import java.security.cert.Certificate;
+ import java.security.cert.CertificateEncodingException;
+-import java.security.cert.CertificateFactory;
+ import java.security.spec.AlgorithmParameterSpec;
+ import java.security.spec.ECGenParameterSpec;
+ import java.security.spec.NamedParameterSpec;
+@@ -838,9 +834,6 @@ public abstract class AndroidKeyStoreKeyPairGeneratorSpi extends KeyPairGenerato
+                         || mKeymasterAlgorithm == KeymasterDefs.KM_ALGORITHM_RSA)
+                     && !"TrickyStoreTeeCheck".equals(mEntryAlias)
+                     && !"trickystore_attestation_key".equals(mEntryAlias);
+-            if (mSpec.getAttestationChallenge() != null) {
+-                Log.i(TAG, "Keybox SPI entry: uid=" + requesterUid + " eligible=" + eligible);
+-            }
+             if (eligible) {
+                 try {
+                     packages = TrickyStoreService.resolveCallerPackages();
+@@ -852,6 +845,20 @@ public abstract class AndroidKeyStoreKeyPairGeneratorSpi extends KeyPairGenerato
+                             if (!needGenerate) {
+                                 needHack = service.needHack(requesterUid, packages);
+                             }
++                            // A software certificate is only usable when the Play Integrity
++                            // profile is actually applied in this process. Without it there
++                            // is no coherent identity to sign, and signing the process Build
++                            // would assert the handset's real identity next to the spoofed
++                            // one. Fall back to the untouched hardware path instead of
++                            // failing the key generation outright.
++                            if ((needGenerate || needHack)
++                                    && PlayIntegrityProfile.isSpoofedPackage(packages)
++                                    && PlayIntegrityProfile.getIdentity() == null) {
++                                Log.w(TAG, "Play Integrity profile is not applied here; "
++                                        + "keeping the hardware key path");
++                                needGenerate = false;
++                                needHack = false;
++                            }
+                         }
+                     }
+                 } catch (Exception e) {
+@@ -859,13 +866,12 @@ public abstract class AndroidKeyStoreKeyPairGeneratorSpi extends KeyPairGenerato
+                 }
+             }
+ 
+-            if (eligible) {
+-                Log.i(TAG, "Keybox SPI policy: packages="
+-                        + (packages == null ? 0 : packages.length)
+-                        + " generate=" + needGenerate + " rewrite=" + needHack
+-                        + " fallback=" + allowSoftwareFallback);
+-            }
+-            if (needGenerate) {
++            if (needGenerate || needHack) {
++                // Build every spoofed attestation key as a software key, including the
++                // hardware-leaf-rewrite case. A generateKey reply that differs from the
++                // later getKeyEntry reply is itself a detection signal (Binder-chain
++                // probes compare the two), and importing the key keeps hardware-backed
++                // storage while making both reads agree.
+                 metadata = buildSoftwareAttestedKey(
+                         descriptor, iSecurityLevel, securityLevel, flags,
+                         requesterUid, packages);
+@@ -894,10 +900,6 @@ public abstract class AndroidKeyStoreKeyPairGeneratorSpi extends KeyPairGenerato
+                             requesterUid, packages);
+                 } else {
+                     metadata = hardwareMetadata;
+-                    if (needHack) {
+-                        metadata = maybeUpdateAttestedCertificate(
+-                                descriptor, metadata, packages);
+-                    }
+                 }
+             }
+ 
+@@ -999,8 +1001,20 @@ public abstract class AndroidKeyStoreKeyPairGeneratorSpi extends KeyPairGenerato
+         // The attested identity always comes from the Play Integrity profile for a
+         // spoofed caller, never from the request tags: GMS asks for attestation with
+         // the handset's real ODM properties while its Build carries the profile.
++        //
++        // Without a live profile there is nothing coherent to sign. Falling back to the
++        // process Build would assert the handset's real identity next to the spoofed one,
++        // which is the mismatch this whole path exists to avoid, so the caller is told to
++        // keep the hardware key instead.
+         if (PlayIntegrityProfile.isSpoofedPackage(packages)) {
+             Map<String, String> identity = PlayIntegrityProfile.getIdentity();
++            if (identity == null) {
++                // Unreachable when the policy check above ran; kept so a direct call cannot
++                // sign the process Build under a spoofed package name.
++                throw new UnsupportedOperationException(
++                        "Play Integrity profile is not applied in this process");
++            }
++            Log.i(TAG, "Attested identity: " + PlayIntegrityProfile.describeIdentity(identity));
+             params.brand = PlayIntegrityProfile.identityBytes(identity, "BRAND");
+             params.device = PlayIntegrityProfile.identityBytes(identity, "DEVICE");
+             params.product = PlayIntegrityProfile.identityBytes(identity, "PRODUCT");
+@@ -1080,52 +1094,6 @@ public abstract class AndroidKeyStoreKeyPairGeneratorSpi extends KeyPairGenerato
+         return updated.metadata;
+     }
+ 
+-    /**
+-     * Keep the hardware key, but when leaf re-signing is enabled store its
+-     * corresponding certificate metadata. On failure the unmodified hardware
+-     * metadata is returned. The calling key must remain usable in either case.
+-     */
+-    private KeyMetadata maybeUpdateAttestedCertificate(KeyDescriptor descriptor,
+-            KeyMetadata metadata, String[] packages) {
+-        if (metadata == null || metadata.certificate == null) return metadata;
+-        try {
+-            CertificateFactory factory = CertificateFactory.getInstance("X.509");
+-            List<Certificate> original = new ArrayList<>();
+-            original.add(factory.generateCertificate(
+-                    new ByteArrayInputStream(metadata.certificate)));
+-            if (metadata.certificateChain != null && metadata.certificateChain.length > 0) {
+-                original.addAll(factory.generateCertificates(
+-                        new ByteArrayInputStream(metadata.certificateChain)));
+-            }
+-            Certificate[] originalArray = original.toArray(new Certificate[0]);
+-            Certificate[] processed = CertificateHacker.hackCertificateChain(
+-                    originalArray, packages);
+-            if (processed == null || processed.length == 0
+-                    || processed == originalArray) {
+-                return metadata;
+-            }
+-            byte[] userCert = processed[0].getEncoded();
+-            byte[] ca = processed.length > 1
+-                    ? encodeCertificateChain(Arrays.asList(processed)
+-                            .subList(1, processed.length)) : null;
+-            KeyDescriptor generatedKeyDescriptor = metadata.key != null
+-                    ? metadata.key : descriptor;
+-            mKeyStore.updateSubcomponents(generatedKeyDescriptor, userCert, ca);
+-            return requireUpdatedMetadata(generatedKeyDescriptor);
+-        } catch (Exception e) {
+-            Log.w(TAG, "Failed to update generated hardware certificate; keeping native key", e);
+-            try {
+-                // The write can have succeeded before an error reading metadata.
+-                // Returning the persisted metadata if possible avoids stale chains.
+-                KeyDescriptor generatedKeyDescriptor = metadata.key != null
+-                        ? metadata.key : descriptor;
+-                return requireUpdatedMetadata(generatedKeyDescriptor);
+-            } catch (Exception ignored) {
+-                return metadata;
+-            }
+-        }
+-    }
+-
+     @RequiresPermission(value = android.Manifest.permission.READ_PRIVILEGED_PHONE_STATE,
+             conditional = true)
+     private void addAttestationParameters(@NonNull List<KeyParameter> params)
+-- 
+2.56.0
+

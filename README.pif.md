@@ -12,13 +12,14 @@ See Google's [verdict documentation](https://developer.android.com/google/play/i
 | `frameworks/base` | `patches/frameworks,base/0011-fix-certificate-generator-imports.patch` |
 | `frameworks/base` | `patches/frameworks,base/0012-keystore-keybox-fallback-and-diagnostics.patch` |
 | `frameworks/base` | `patches/frameworks,base/0013-remove-attestation-patch-level-overrides.patch` |
+| `frameworks/base` | `patches/frameworks,base/0015-attestation-version-and-identity.patch` |
 | `packages/apps/Settings` | `patches/packages,apps,Settings/0002-Settings-RKP-keybox-and-attestation-state.patch` |
 | `packages/apps/Settings` | `patches/packages,apps,Settings/0003-remove-attestation-patch-level-preference.patch` |
 
 `vendorsetup.sh` already applies every project's patches with `git am` in
 filename order, so sourcing `build/envsetup.sh` is all that is needed. The
-`0009-` through `0013-` / `0002-` through `0003-` numbering keeps each patch after the existing ones; `git am`
-applies them in name order.
+`0009-` through `0015-` / `0002-` through `0003-` numbering keeps each patch after
+the existing ones; `git am` applies them in name order.
 
 ## Why the inherited code could not pass
 
@@ -42,6 +43,21 @@ real ODM identity. Three separate defects followed from that:
    `Signature.getInstance("SHA256withECDSA", "BC")` and
    `JcaContentSignerBuilder("SHA256withECDSA")` throw on device. Any re-signing
    path built on them fails silently into the "keep the hardware chain" branch.
+
+Two further defects surfaced on the device itself (2026-11-06 log) and are fixed by
+`0015-`:
+
+4. **The asserted version described the ROM, not the hardware.** `getAttestVersion()`
+   followed the running SDK, so a PixelOS 17 build on KeyMint V3 hardware claimed
+   `attestationVersion=400` while the vendor HAL reports V3 (300) and the spoofed
+   Pixel 6a profile launched at API 32 (100). Verifiers cross-check the claimed
+   version against the attested key, so three disagreeing values is itself the
+   mismatch. It is now derived from `ro.product.first_api_level`, the bootloader
+   value PIF does not rewrite: this device reports 35 and asserts 300.
+5. **A missing profile silently became the handset identity.**
+   `identityBytes()` fell back to the process Build, so a process whose Build was
+   not spoofed produced a certificate claiming `OnePlus/PKX110` beside a Pixel
+   fingerprint. It now returns null, and callers keep the untouched hardware path.
 
 ## What the patches change
 
@@ -137,7 +153,7 @@ Removing the keybox restores the previous behaviour, where
 
 `tests/pif/run-tests.sh <android-root>` builds the platform's repackaged
 BouncyCastle, compiles the production classes from the applied patch, and runs
-165 host checks with real ECDSA/RSA material:
+216 host checks with real ECDSA/RSA material:
 
 - the extension encoder: tag set, ascending order, profile identity vs request
   identity, absent physical identifiers, RootOfTrust layout, RSA vs EC fields;
@@ -153,7 +169,12 @@ BouncyCastle, compiles the production classes from the applied patch, and runs
   Keystore backend: request translation, one application-ID wrapper, persisted key
   IDs, private-key/leaf match, private-byte clearing and incomplete-import cleanup;
 - signature digests: a SHA-384 signature verifies as SHA-384, not as SHA-256 or
-  SHA-512, and is genuinely over the SHA-384 hash.
+  SHA-512, and is genuinely over the SHA-384 hash;
+- attestation version: API 35 maps to KeyMint 300 and API 37 to 500, Keymaster 4
+  encodes as 41, and the osVersion encoding matches KeyMint;
+- identity: a profile field the profile omits returns null rather than the process
+  Build, and diagnostics never include identifiers;
+- leaf serials: generated serials are positive, distinct and not the old fixed 1.
 
 ```
 vendor/extraPatches/tests/pif/run-tests.sh /path/to/android/root
@@ -193,6 +214,6 @@ intercept a caller that uses the native Binder API directly.
 
 The report's keybox expires at 2026-11-04 10:54:52 UTC. These changes do not extend
 certificate validity. The final patches passed the actual framework Turbine
-header command, javac against the build classpath, 165 host checks, sequential
+header command, javac against the build classpath, 216 host checks, sequential
 patch application and Settings XML parsing. They have not been flashed or shown
 to produce all three Play Integrity labels on this device.

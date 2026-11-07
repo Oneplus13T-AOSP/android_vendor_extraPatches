@@ -45,6 +45,7 @@ echo "==> staging the production sources under test"
 mkdir -p "$OUT/src/android/security/trickystore"
 cp "$BASE"/core/java/android/security/trickystore/AttestationExtensionBuilder.java \
    "$BASE"/core/java/android/security/trickystore/AttestationLeafRewriter.java \
+   "$BASE"/core/java/android/security/trickystore/AttestationVersion.java \
    "$BASE"/core/java/android/security/trickystore/BcCrypto.java \
    "$BASE"/core/java/android/security/trickystore/KeyBoxManager.java \
    "$BASE"/core/java/android/security/trickystore/LeafCertificateBuilder.java \
@@ -86,7 +87,7 @@ echo "==> running"
 CP="$OUT/classes:$BC:$KXML"
 FAILED=0
 TOTAL=0
-for t in AttestationBuilderCheck KeyboxCheck HackerCheck SoftwareCheck DigestCheck ServiceCheck FallbackCheck; do
+for t in AttestationBuilderCheck KeyboxCheck HackerCheck SoftwareCheck DigestCheck ServiceCheck FallbackCheck VersionCheck IdentityCheck; do
     STATUS=0
     RESULT=$(java -cp "$CP" "$t" 2>&1) || STATUS=$?
     N=$(printf '%s\n' "$RESULT" | grep -c '^ok:' || true)

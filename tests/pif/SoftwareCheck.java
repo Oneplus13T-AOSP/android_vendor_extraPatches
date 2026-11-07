@@ -1,4 +1,5 @@
 import android.security.trickystore.AttestationExtensionBuilder;
+import android.security.trickystore.CertificateGenerator;
 import android.security.trickystore.KeyBoxManager;
 import android.security.trickystore.LeafCertificateBuilder;
 
@@ -70,6 +71,20 @@ public class SoftwareCheck {
                 AttestationExtensionBuilder.build(p));
 
         check(leaf != null, "software leaf generated");
+        // A fixed serial on every device is a software-certificate fingerprint; KeyMint
+        // issues a random one per key, so two leaves must not share a serial.
+        java.security.KeyPair subject2 = ec();
+        X509Certificate leaf2 = LeafCertificateBuilder.build(
+                subject2, keybox.getKeybox("EC"),
+                java.math.BigInteger.valueOf(99999),
+                new Date(System.currentTimeMillis() - 1000L),
+                new Date(System.currentTimeMillis() + 86400000L),
+                new X500Name("CN=Android Keystore Key"),
+                KeyUsage.digitalSignature,
+                AttestationExtensionBuilder.build(p));
+        check(leaf.getSerialNumber().signum() > 0, "leaf serial is positive");
+        check(!leaf2.getSerialNumber().equals(leaf.getSerialNumber()),
+                "distinct leaves get distinct serials");
         check(BcCryptoShim.verify(leaf.getSigAlgName(), issuer.getPublicKey(),
                         leaf.getTBSCertificate(), leaf.getSignature()),
                 "software leaf verifies against the keybox issuer");
@@ -145,6 +160,16 @@ public class SoftwareCheck {
         check(BcCryptoShim.verify(ecLeaf.getSigAlgName(), rsaIssuer.getPublicKey(),
                         ecLeaf.getTBSCertificate(), ecLeaf.getSignature()),
                 "EC leaf verifies against an RSA-only keybox issuer");
+
+        // Generated serials must be positive, distinct, and not the old fixed 1.
+        java.math.BigInteger a = CertificateGenerator.generateRandomSerial();
+        java.math.BigInteger b = CertificateGenerator.generateRandomSerial();
+        check(a.signum() > 0, "generated serial is positive");
+        check(b.signum() > 0, "second generated serial is positive");
+        check(!a.equals(b), "generated serials differ");
+        check(!a.equals(java.math.BigInteger.ONE),
+                "generated serial is not the old fixed value 1");
+        check(a.bitLength() >= 60, "generated serial uses the full range");
 
         System.out.println();
         System.out.println(failures == 0 ? "ALL CHECKS PASSED" : failures + " FAILURE(S)");
