@@ -1,0 +1,26 @@
+From d05dbfb5548d43be9647cc49e22e8ee3485d0e8b Mon Sep 17 00:00:00 2001
+From: RobertGarciaa <chae0218@naver.com>
+Date: Mon, 9 Nov 2026 22:59:49 +0900
+Subject: [PATCH] StagefrightRecorder: clear Oplus metadata on reset
+
+OplusUserData is per-recording metadata. Keeping it after reset can tag a later SDR recording with a previous HDR recording payload. Clear it alongside the other recording parameters.
+---
+ media/libmediaplayerservice/StagefrightRecorder.cpp | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/media/libmediaplayerservice/StagefrightRecorder.cpp b/media/libmediaplayerservice/StagefrightRecorder.cpp
+index fa50eec..b6401f8 100644
+--- a/media/libmediaplayerservice/StagefrightRecorder.cpp
++++ b/media/libmediaplayerservice/StagefrightRecorder.cpp
+@@ -2572,6 +2572,8 @@ status_t StagefrightRecorder::reset() {
+     mRotationDegrees = 0;
+     mLatitudex10000 = -3600000;
+     mLongitudex10000 = -3600000;
++    // OplusUserData belongs to one recording, just like its location/rotation.
++    mOplusUserData.clear();
+     mTotalBitRate = 0;
+ 
+     // tracking how long we recorded.
+-- 
+2.56.0
+
