@@ -1,0 +1,37 @@
+From 5d2efbee5df6531dd9fa51964c3affeabbbaa6fb Mon Sep 17 00:00:00 2001
+From: RobertGarciaa <chae0218@naver.com>
+Date: Thu, 12 Nov 2026 15:09:24 +0900
+Subject: [PATCH] skcms: provide the vendor variant required by libjxl
+
+libjxl is vendor_available, so Soong also builds a vendor variant of it.
+libjxl whole-links libskia_skcms, which means libskia_skcms needs a vendor
+variant as well.
+
+Without this, Soong analysis fails with:
+
+  dependency "libskia_skcms" of "libjxl" missing variant:
+    os:android,image:vendor,link:static
+
+Change-Id: I02b8909ccf372f53b1b865f0aaf958f6881bd10b
+---
+ Android.bp | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/Android.bp b/Android.bp
+index ff23e96425..29cf65bb8a 100644
+--- a/Android.bp
++++ b/Android.bp
+@@ -1158,6 +1158,10 @@ gensrcs {
+ cc_library_static {
+     name: "libskia_skcms",
+     host_supported: true,
++    // libjxl is vendor_available, so Soong also builds a vendor variant of it.
++    // libjxl whole-links libskia_skcms, which means this module needs a vendor
++    // variant as well.
++    vendor_available: true,
+     sdk_version: "current",
+     srcs: [
+         "modules/skcms/skcms.cc",
+-- 
+2.56.1
+

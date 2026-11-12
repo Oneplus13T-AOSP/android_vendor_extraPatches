@@ -1,0 +1,43 @@
+From 93f410ed894dc80ce96e6a937fc31891fa265adb Mon Sep 17 00:00:00 2001
+From: RobertGarciaa <chae0218@naver.com>
+Date: Thu, 12 Nov 2026 15:09:23 +0900
+Subject: [PATCH] xmp: expose the complete libdng_sdk vendor dependency chain
+
+libdng_sdk is vendor_available and whole-links xmp_toolkit_sdk, which in
+turn whole-links zuid_md5. Expose both vendor variants so the dependency
+chain is complete.
+
+The remaining explicit dependency, libexpat, is already vendor available.
+
+Change-Id: I01d7938846ffa8ab53c7d71aaf5abeb0b1e06c94
+---
+ Android.bp | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/Android.bp b/Android.bp
+index 285475c..5f0d863 100644
+--- a/Android.bp
++++ b/Android.bp
+@@ -16,6 +16,9 @@ license {
+ cc_library {
+     name: "zuid_md5",
+     host_supported: true,
++    // libdng_sdk is vendor_available, and xmp_toolkit_sdk whole-links this
++    // library, so the vendor build needs a vendor variant of it as well.
++    vendor_available: true,
+     sdk_version: "current",
+     stl: "c++_shared",
+     target: {
+@@ -37,6 +40,9 @@ cc_library {
+ cc_library {
+     name: "xmp_toolkit_sdk",
+     host_supported: true,
++    // libdng_sdk is vendor_available and whole-links this library, so Soong
++    // also has to build a vendor variant of it.
++    vendor_available: true,
+     sdk_version: "current",
+     stl: "c++_shared",
+     export_include_dirs: [
+-- 
+2.56.1
+
